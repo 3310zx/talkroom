@@ -11,6 +11,7 @@ import '../../core/theme.dart';
 import '../../services/update_service.dart';
 import '../active_tasks/active_tasks_page.dart';
 import '../api_config/api_config_list_page.dart';
+import '../cache_hits/cache_hits_page.dart';
 import '../sync/local_server_page.dart';
 import '../sync/sync_setup_page.dart';
 
@@ -144,6 +145,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const LocalServerPage()),
+            ),
+          ),
+
+          const Divider(),
+          _sectionHeader('性能'),
+          ListTile(
+            leading: const Icon(Icons.speed_outlined),
+            title: const Text('命中缓存'),
+            subtitle: const Text('查看历史请求的缓存命中情况（token 命中率）'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const CacheHitsPage()),
             ),
           ),
 

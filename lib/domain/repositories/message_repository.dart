@@ -50,4 +50,16 @@ abstract class MessageRepository {
   /// 服务器权威库：为电脑端本地产生的待同步消息（server_id IS NULL）分配
   /// server_id 并落库，使电脑端消息也能被增量同步到手机端。
   Future<List<ChatMessage>> finalizeLocalMessages();
+
+  // ---- 缓存命中记录（设置页「命中缓存」） ----
+
+  /// 记录一条缓存命中；无可写数据（cached_tokens=0 且无 prompt_tokens）时
+  /// 返回 -1 表示已忽略。
+  Future<int> insertCacheHit(CacheHitRecord record);
+
+  /// 按时间倒序拉取缓存命中记录
+  Future<List<CacheHitRecord>> listCacheHits({int limit = 200});
+
+  /// 清空全部缓存命中记录（仅清 cache_hits 表，不动聊天历史）
+  Future<int> clearCacheHits();
 }

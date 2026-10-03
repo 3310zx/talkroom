@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/providers/api_configs_provider.dart';
 import '../../application/providers/conversations_provider.dart';
+import '../../application/providers/database_provider.dart';
 import '../../application/providers/messages_provider.dart';
 import '../../application/providers/settings_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
@@ -133,6 +134,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                     message.status == 'error'
                                 ? () => _retry(message)
                                 : null,
+                            reasoningContent: message.reasoningContent,
+                            reasoningDurationMs: message.reasoningDurationMs,
+                            reasoningTokens: message.reasoningTokens,
                           );
                         },
                       ),
@@ -338,7 +342,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         topP: topP,
       );
 
-      // 8) 完成态落库并刷新会话摘要。
+      // 8) 完成态落库并刷新会话摘要；同时将缓存命中写入独立记录表
+      // （设置页「命中缓存」数据源，与聊天历史解耦可单独清空）。
       await ref.read(messagesProvider.notifier).update(ChatMessage(
             id: assistantId,
             conversationId: conversationId,
@@ -348,8 +353,24 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             modelId: model,
             promptTokens: result.promptTokens,
             completionTokens: result.completionTokens,
+            reasoningContent: result.reasoningContent,
+            reasoningDurationMs: result.reasoningDurationMs,
+            reasoningTokens: result.reasoningTokens,
+            cachedTokens: result.cachedTokens,
             createdAt: now + 1,
           ));
+      if (result.cachedTokens != null || result.promptTokens != null) {
+        await ref
+            .read(appDatabaseProvider)
+            .messageRepository
+            .insertCacheHit(CacheHitRecord(
+              modelId: model,
+              cachedTokens: result.cachedTokens ?? 0,
+              promptTokens: result.promptTokens,
+              completionTokens: result.completionTokens,
+              createdAt: DateTime.now().millisecondsSinceEpoch,
+            ));
+      }
       await _updateConversationMeta(
         conversationId,
         _summarize(result.content),

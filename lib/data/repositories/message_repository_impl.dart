@@ -62,6 +62,31 @@ class MessageRepositoryImpl implements MessageRepository {
     await _appDatabase.db.delete('messages', where: 'id = ?', whereArgs: [id]);
   }
 
+  // ---- 缓存命中记录（设置页「命中缓存」） ----
+
+  @override
+  Future<int> insertCacheHit(CacheHitRecord record) async {
+    if (record.cachedTokens <= 0 && record.promptTokens == null) {
+      return -1;
+    }
+    return _appDatabase.db.insert('cache_hits', record.toMap()..remove('id'));
+  }
+
+  @override
+  Future<List<CacheHitRecord>> listCacheHits({int limit = 200}) async {
+    final rows = await _appDatabase.db.query(
+      'cache_hits',
+      orderBy: 'created_at DESC, id DESC',
+      limit: limit,
+    );
+    return rows.map(CacheHitRecord.fromMap).toList();
+  }
+
+  @override
+  Future<int> clearCacheHits() async {
+    return _appDatabase.db.delete('cache_hits');
+  }
+
   // ---- 局域网同步（PRD 第 7 章） ----
 
   @override

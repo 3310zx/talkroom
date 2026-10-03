@@ -43,13 +43,31 @@ class LlmException implements Exception {
 class LlmStreamResult {
   const LlmStreamResult({
     required this.content,
+    this.reasoningContent,
+    this.reasoningDurationMs,
+    this.reasoningTokens,
     this.promptTokens,
     this.completionTokens,
+    this.cachedTokens,
   });
 
+  /// 正文（不含思维链）
   final String content;
+
+  /// 思维链文本（与正文分离，供界面折叠展示）
+  final String? reasoningContent;
+
+  /// 思考耗时（毫秒）：从请求发出到收到首个正文 token。
+  final int? reasoningDurationMs;
+
+  /// 思考消耗 token（usage 缺失时按字符数估算）
+  final int? reasoningTokens;
+
   final int? promptTokens;
   final int? completionTokens;
+
+  /// 缓存命中 token（usage.prompt_tokens_details.cached_tokens）
+  final int? cachedTokens;
 }
 
 /// LLM 客户端（OpenAI 兼容 `/chat/completions`，SSE 流式）。
@@ -76,9 +94,16 @@ class LlmClient {
     int? maxTokens,
     double? topP,
   }) async {
-    final buffer = StringBuffer();
+    final contentBuffer = StringBuffer();
+    final reasoningBuffer = StringBuffer();
     int? promptTokens;
     int? completionTokens;
+    int? cachedTokens;
+    // 思考耗时：请求发出时刻（post 前）→ 首个正文 token 到达时刻；
+    // 若流结束仍未收到正文（纯推理被停止等），用流结束时刻兜底。
+    final requestStartedAt = DateTime.now();
+    DateTime? firstContentAt;
+    DateTime? streamEndAt;
 
     final Response<ResponseBody> response;
     try {
@@ -137,27 +162,30 @@ class LlmClient {
         if (first is! Map<String, dynamic>) return;
         final delta = first['delta'];
         if (delta is Map<String, dynamic>) {
+          // 正文增量：进入 contentBuffer 并通过 onDelta 实时回调界面。
           final content = delta['content'];
           if (content is String && content.isNotEmpty) {
-            buffer.write(content);
+            firstContentAt ??= DateTime.now();
+            contentBuffer.write(content);
             onDelta(content);
             receivedContent = true;
-          } else {
-            // 推理模型（如 DeepSeek-R1 系）流式响应中正文阶段前 delta.content
-            // 可能为空，思考过程放在 delta.reasoning_content；将其作为回复内容
-            // 累加展示，避免界面误判为"无回复"。
-            final reasoning = delta['reasoning_content'];
-            if (reasoning is String && reasoning.isNotEmpty) {
-              buffer.write(reasoning);
-              onDelta(reasoning);
-              receivedContent = true;
-            }
+          }
+          // 思维链增量：进入独立 reasoningBuffer（与正文分离展示），
+          // 不回调 onDelta，避免界面将思维链误拼入正文。
+          final reasoning = delta['reasoning_content'];
+          if (reasoning is String && reasoning.isNotEmpty) {
+            reasoningBuffer.write(reasoning);
+            receivedContent = true;
           }
         }
         final usage = decoded['usage'];
         if (usage is Map<String, dynamic>) {
           promptTokens ??= usage['prompt_tokens'] as int?;
           completionTokens ??= usage['completion_tokens'] as int?;
+          final details = usage['prompt_tokens_details'];
+          if (details is Map<String, dynamic>) {
+            cachedTokens ??= details['cached_tokens'] as int?;
+          }
         }
       }
 
@@ -170,6 +198,7 @@ class LlmClient {
         handleLine(line);
         if (done) break;
       }
+      streamEndAt = DateTime.now();
 
       // 关键兜底：流正常结束但未收到任何有效内容时，显式抛错而非静默返回
       // 空内容。此前该场景会被上层当作"成功回复了空消息"处理，界面表现为
@@ -192,10 +221,27 @@ class LlmClient {
       throw _classifyError(e);
     }
 
+    final content = contentBuffer.toString();
+    final reasoning = reasoningBuffer.toString();
+    // 流正常结束必有 streamEndAt（异常路径已提前 throw），此处仅兜底 firstContentAt。
+    final reasoningEnd = firstContentAt ?? streamEndAt;
+    final reasoningDurationMs =
+        reasoningEnd.difference(requestStartedAt).inMilliseconds;
+    // usage 缺失时按字符数估算（约 4 字符/token，与多数中文 tokenizer 接近）；
+    // prompt_tokens 因缺少输入文本信息无法估算，保持 null。
+    final estimatedCompletion =
+        content.isNotEmpty ? (content.length / 4).ceil() : null;
+    final estimatedReasoning =
+        reasoning.isNotEmpty ? (reasoning.length / 4).ceil() : null;
+
     return LlmStreamResult(
-      content: buffer.toString(),
+      content: content,
+      reasoningContent: reasoning.isEmpty ? null : reasoning,
+      reasoningDurationMs: reasoning.isEmpty ? null : reasoningDurationMs,
+      reasoningTokens: reasoning.isEmpty ? null : estimatedReasoning,
       promptTokens: promptTokens,
-      completionTokens: completionTokens,
+      completionTokens: completionTokens ?? estimatedCompletion,
+      cachedTokens: cachedTokens,
     );
   }
 
@@ -244,15 +290,34 @@ class LlmClient {
     final first = choices.first;
     final message = (first is Map<String, dynamic>) ? first['message'] : null;
     final content = (message is Map<String, dynamic>) ? message['content'] : null;
+    final reasoning =
+        (message is Map<String, dynamic>) ? message['reasoning_content'] : null;
     final usage = data['usage'];
+    final promptTokens = (usage is Map<String, dynamic>)
+        ? usage['prompt_tokens'] as int?
+        : null;
+    final completionTokens = (usage is Map<String, dynamic>)
+        ? usage['completion_tokens'] as int?
+        : null;
+    int? cachedTokens;
+    if (usage is Map<String, dynamic>) {
+      final details = usage['prompt_tokens_details'];
+      if (details is Map<String, dynamic>) {
+        cachedTokens = details['cached_tokens'] as int?;
+      }
+    }
+    final text = content is String ? content : '';
+    final reasoningText = reasoning is String ? reasoning : '';
+    // usage 缺失时按字符数估算；prompt_tokens 无输入文本信息无法估算。
     return LlmStreamResult(
-      content: content is String ? content : '',
-      promptTokens: (usage is Map<String, dynamic>)
-          ? usage['prompt_tokens'] as int?
-          : null,
-      completionTokens: (usage is Map<String, dynamic>)
-          ? usage['completion_tokens'] as int?
-          : null,
+      content: text,
+      reasoningContent: reasoningText.isEmpty ? null : reasoningText,
+      reasoningDurationMs: null,
+      reasoningTokens:
+          reasoningText.isEmpty ? null : (reasoningText.length / 4).ceil(),
+      promptTokens: promptTokens,
+      completionTokens: completionTokens ?? (text.isEmpty ? null : (text.length / 4).ceil()),
+      cachedTokens: cachedTokens,
     );
   }
 

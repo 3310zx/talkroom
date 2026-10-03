@@ -10,6 +10,8 @@ import 'package:markdown/markdown.dart' as md;
 /// - 用户消息：右侧纯文本气泡；
 /// - 助手消息：左侧 Markdown 渲染气泡（`flutter_markdown` + `flutter_highlight`
 ///   代码块高亮，识别 language 标签，深/浅色主题自适应）；
+/// - 思维链：`reasoningContent` 非空时以「思考过程 · 用时 X.Xs · 消耗 N tokens」
+///   折叠卡片展示（默认收起，点击展开），与正文明显区分；
 /// - 错误态：`status == 'error'` 显示错误边框与中文错误摘要 + 重试按钮；
 /// - 停止态：`status == 'stopped'` 保留已生成内容并标注「已停止生成」。
 class MessageBubble extends StatelessWidget {
@@ -20,6 +22,9 @@ class MessageBubble extends StatelessWidget {
     this.status,
     this.errorMessage,
     this.onRetry,
+    this.reasoningContent,
+    this.reasoningDurationMs,
+    this.reasoningTokens,
   });
 
   final bool isUser;
@@ -28,12 +33,22 @@ class MessageBubble extends StatelessWidget {
   final String? errorMessage;
   final VoidCallback? onRetry;
 
+  /// 思维链文本（与正文分离展示，默认折叠）
+  final String? reasoningContent;
+
+  /// 思考耗时（毫秒），为空则不显示用时
+  final int? reasoningDurationMs;
+
+  /// 思考消耗 token 数（usage 缺失时为估算值），为空则不显示
+  final int? reasoningTokens;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isError = status == 'error';
     final isStreaming = status == 'streaming';
     final isStopped = status == 'stopped';
+    final hasReasoning = reasoningContent != null && reasoningContent!.isNotEmpty;
 
     final bubbleColor = isError
         ? theme.colorScheme.errorContainer
@@ -58,14 +73,30 @@ class MessageBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
+            // 思维链折叠卡片：灰色底、斜体小字、分隔线，与正文明显区分。
+            if (hasReasoning && !isUser) ...[
+              _ReasoningCard(
+                content: reasoningContent!,
+                durationMs: reasoningDurationMs,
+                tokens: reasoningTokens,
+              ),
+              if (content.trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Divider(
+                    height: 1,
+                    color: theme.colorScheme.outlineVariant,
+                  ),
+                ),
+            ],
             if (isUser)
               Text(content, style: theme.textTheme.bodyLarge)
-            else if (content.trim().isEmpty)
+            else if (content.trim().isEmpty && !hasReasoning)
               Text(
                 isStreaming ? '正在思考…' : '',
                 style: theme.textTheme.bodyLarge,
               )
-            else
+            else if (content.trim().isNotEmpty)
               MarkdownBody(
                 data: content,
                 selectable: true,
@@ -122,6 +153,102 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
+}
+
+/// 思维链折叠卡片（默认收起，点击标题展开/收起）。
+///
+/// 样式刻意与正文区分：灰色圆角底、斜体小字、标题行显示
+/// 「思考过程 · 用时 X.Xs · 消耗 N tokens」，防止与正文混淆。
+class _ReasoningCard extends StatefulWidget {
+  const _ReasoningCard({
+    required this.content,
+    this.durationMs,
+    this.tokens,
+  });
+
+  final String content;
+  final int? durationMs;
+  final int? tokens;
+
+  @override
+  State<_ReasoningCard> createState() => _ReasoningCardState();
+}
+
+class _ReasoningCardState extends State<_ReasoningCard> {
+  bool _expanded = false;
+
+  String get _title {
+    final parts = <String>['思考过程'];
+    final ms = widget.durationMs;
+    if (ms != null) {
+      parts.add('用时 ${(ms / 1000).toStringAsFixed(1)}s');
+    }
+    final tokens = widget.tokens;
+    if (tokens != null && tokens > 0) {
+      parts.add('消耗 $tokens tokens');
+    }
+    return parts.join(' · ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final bgColor = isDark ? const Color(0xFF2A2A2A) : const Color(0xFFF0F0F0);
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              child: Row(
+                children: [
+                  Icon(
+                    _expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+                    size: 16,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      _title,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(12, 2, 12, 10),
+              child: Text(
+                widget.content,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontStyle: FontStyle.italic,
+                  color: theme.colorScheme.onSurfaceVariant,
+                  height: 1.4,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 /// 提取 fenced code block 的源码与语言标签（`language-dart` 等），

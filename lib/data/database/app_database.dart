@@ -34,7 +34,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -84,20 +84,36 @@ class AppDatabase {
 
     await db.execute('''
       CREATE TABLE messages (
-        id                INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_id   INTEGER NOT NULL,
-        role              TEXT NOT NULL,
-        content           TEXT NOT NULL,
-        content_type      TEXT NOT NULL DEFAULT 'text',
-        status            TEXT NOT NULL DEFAULT 'done',
-        model_id          TEXT,
-        prompt_tokens     INTEGER,
-        completion_tokens INTEGER,
-        error_message     TEXT,
-        created_at        INTEGER NOT NULL
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id     INTEGER NOT NULL,
+        role                TEXT NOT NULL,
+        content             TEXT NOT NULL,
+        content_type        TEXT NOT NULL DEFAULT 'text',
+        status              TEXT NOT NULL DEFAULT 'done',
+        model_id            TEXT,
+        prompt_tokens       INTEGER,
+        completion_tokens   INTEGER,
+        error_message       TEXT,
+        created_at          INTEGER NOT NULL,
+        reasoning_content   TEXT,
+        reasoning_duration_ms INTEGER,
+        reasoning_tokens    INTEGER,
+        cached_tokens       INTEGER
       )
     ''');
     await db.execute('CREATE INDEX idx_messages_conv ON messages(conversation_id, created_at)');
+
+    await db.execute('''
+      CREATE TABLE cache_hits (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        model_id          TEXT,
+        cached_tokens     INTEGER NOT NULL DEFAULT 0,
+        prompt_tokens     INTEGER,
+        completion_tokens INTEGER,
+        created_at        INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('CREATE INDEX idx_cache_hits_created ON cache_hits(created_at DESC)');
 
     await db.execute('''
       CREATE TABLE active_tasks (
@@ -193,6 +209,46 @@ class AppDatabase {
     if (oldVersion < 3) {
       await _migrateActiveTasksV3(db);
     }
+    // version 3 -> 4：思维链字段 + 缓存命中字段与 cache_hits 表
+    if (oldVersion < 4) {
+      await _migrateMessagesV4(db);
+    }
+  }
+
+  /// version 3 -> 4 迁移：
+  /// - `messages` 追加 `reasoning_content` / `reasoning_duration_ms` /
+  ///   `reasoning_tokens` / `cached_tokens` 四列（幂等，旧数据为 NULL，
+  ///   模型层 fromMap 归一化兼容）；
+  /// - 新建 `cache_hits` 表（设置页「命中缓存」列表 / 清空用）。
+  Future<void> _migrateMessagesV4(Database db) async {
+    final cols = await db.rawQuery('PRAGMA table_info(messages)');
+    final existing = cols.map((c) => c['name'] as String).toSet();
+    if (!existing.contains('reasoning_content')) {
+      await db.execute('ALTER TABLE messages ADD COLUMN reasoning_content TEXT');
+    }
+    if (!existing.contains('reasoning_duration_ms')) {
+      await db.execute(
+          'ALTER TABLE messages ADD COLUMN reasoning_duration_ms INTEGER');
+    }
+    if (!existing.contains('reasoning_tokens')) {
+      await db.execute(
+          'ALTER TABLE messages ADD COLUMN reasoning_tokens INTEGER');
+    }
+    if (!existing.contains('cached_tokens')) {
+      await db.execute('ALTER TABLE messages ADD COLUMN cached_tokens INTEGER');
+    }
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS cache_hits (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        model_id          TEXT,
+        cached_tokens     INTEGER NOT NULL DEFAULT 0,
+        prompt_tokens     INTEGER,
+        completion_tokens INTEGER,
+        created_at        INTEGER NOT NULL
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_cache_hits_created ON cache_hits(created_at DESC)');
   }
 
   /// version 2 -> 3 迁移：

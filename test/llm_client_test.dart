@@ -59,14 +59,23 @@ void main() {
       expect(content, '你好');
     });
 
-    test('推理模型：delta.reasoning_content 被累加展示而非静默丢弃', () async {
-      final content = await _runStream(
-        'data: {"choices":[{"delta":{"reasoning_content":"思考中"}}]}\n\n'
-        'data: {"choices":[{"delta":{"content":"结论"}}]}\n\n'
-        'data: [DONE]\n\n',
-        'https://api.siliconflow.cn/v1',
+    test('推理模型：思维链与正文分离（reasoning 不混入 content）', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _FakeAdapter(
+          'data: {"choices":[{"delta":{"reasoning_content":"思考中"}}]}\n\n'
+          'data: {"choices":[{"delta":{"content":"结论"}}]}\n\n'
+          'data: [DONE]\n\n',
+        );
+      final client = LlmClient(dio: dio);
+      final result = await client.chatStream(
+        baseUrl: 'https://api.siliconflow.cn/v1',
+        apiKey: 'sk-test',
+        model: 'deepseek-ai/DeepSeek-V4-Flash',
+        messages: const [{'role': 'user', 'content': '你好'}],
+        onDelta: (_) {},
       );
-      expect(content, '思考中结论');
+      expect(result.content, '结论');
+      expect(result.reasoningContent, '思考中');
     });
 
     test('流正常结束但零内容：抛 parse 异常（界面将显示错误而非静默空回复）', () async {
