@@ -38,6 +38,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   bool _isSending = false;
   int? _currentAssistantId;
 
+  /// 是否已对 API 配置触发过「空态兜底加载」，防止 provider 未初始化/
+  /// 加载失败时首页长期误显示「尚未添加 API 配置」。
+  bool _apiEmptyLoadTriggered = false;
+
   @override
   void dispose() {
     _inputController.dispose();
@@ -50,6 +54,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final selected = ref.watch(selectedConversationProvider);
     final messages = ref.watch(messagesProvider);
     final apiConfigs = ref.watch(apiConfigsProvider);
+    // 兜底：列表为空且 provider 从未成功加载时，主动补一次加载，
+    // 避免「尚未添加 API 配置」误报（数据实际存在但 state 未就绪）。
+    final apiNotifier = ref.read(apiConfigsProvider.notifier);
+    if (apiConfigs.isEmpty && !apiNotifier.loaded && !_apiEmptyLoadTriggered) {
+      _apiEmptyLoadTriggered = true;
+      Future<void>(apiNotifier.load);
+    }
     final currentApi = _resolveApiConfig(apiConfigs, selected);
     final currentModel = _resolveModel(currentApi, selected);
     // 手机窄屏才需要会话抽屉；宽屏三栏已有左侧会话列表，不重复叠加。

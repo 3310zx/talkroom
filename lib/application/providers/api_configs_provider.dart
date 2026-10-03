@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/secure_storage/api_key_store.dart';
@@ -16,9 +17,24 @@ class ApiConfigsNotifier extends StateNotifier<List<ApiConfig>> {
 
   final ApiConfigRepository _repository;
 
+  /// 是否已成功从数据库完成至少一次加载。
+  ///
+  /// 用于区分「确实没有配置」与「尚未加载/加载失败」，避免首页空态
+  /// 把后两者误显示为「尚未添加 API 配置」。
+  bool _loaded = false;
+  bool get loaded => _loaded;
+
   /// 从数据库加载全部配置。
+  ///
+  /// 失败时保留当前状态并记录日志：既避免异常中断 HomePage 的启动链
+  /// （会话/设置/主动消息等后续加载），也避免 UI 长期停留在错误空态。
   Future<void> load() async {
-    state = await _repository.getAll();
+    try {
+      state = await _repository.getAll();
+      _loaded = true;
+    } catch (e, st) {
+      debugPrint('ApiConfigsNotifier.load failed: $e\n$st');
+    }
   }
 
   /// 新增配置；[apiKey] 写入安全存储，数据库仅存引用键。
