@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../application/providers/api_configs_provider.dart';
 import '../../application/providers/local_server_provider.dart';
@@ -7,6 +8,7 @@ import '../../application/providers/settings_provider.dart';
 import '../../application/providers/sync_provider.dart';
 import '../../core/constants.dart';
 import '../../core/theme.dart';
+import '../../services/update_service.dart';
 import '../active_tasks/active_tasks_page.dart';
 import '../api_config/api_config_list_page.dart';
 import '../sync/local_server_page.dart';
@@ -23,6 +25,24 @@ class SettingsPage extends ConsumerStatefulWidget {
 }
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
+  /// 当前应用版本号（异步从 package_info_plus 读取，用于"检查更新"副标题展示）
+  String _currentVersion = '…';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCurrentVersion();
+  }
+
+  Future<void> _loadCurrentVersion() async {
+    try {
+      final v = await UpdateService.currentVersion();
+      if (mounted) setState(() => _currentVersion = v);
+    } catch (_) {
+      // 版本读取失败时保持占位符，不阻塞设置页
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final apiConfigs = ref.watch(apiConfigsProvider);
@@ -146,6 +166,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             subtitle: Text('TODO(M0)：提示词模板管理'),
             enabled: false,
           ),
+
+          const Divider(),
+          _sectionHeader('关于'),
+          ListTile(
+            leading: const Icon(Icons.system_update_alt_outlined),
+            title: const Text('检查更新'),
+            subtitle: Text('当前版本 $_currentVersion'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _checkForUpdate,
+          ),
         ],
       ),
     );
@@ -241,6 +271,114 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const ApiConfigListPage()),
     );
+  }
+
+  /// 检查更新：请求 GitHub Releases API，与当前版本比对后弹窗提示。
+  ///
+  /// - 有新版本：显示新版本号、Release 名称与更新说明，提供 APK 下载按钮；
+  /// - 无新版本：提示已是最新版本；
+  /// - 请求失败/解析失败：提示检查失败原因。
+  Future<void> _checkForUpdate() async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    final navigator = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Dialog(
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+              SizedBox(width: 16),
+              Text('正在检查更新…'),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final update = await UpdateService().fetchLatestRelease();
+      final current = await UpdateService.currentVersion();
+      if (!mounted) return;
+      navigator.pop();
+      if (UpdateService.compareVersions(update.version, current) > 0) {
+        await _showUpdateDialog(update);
+      } else {
+        _showSnack('当前已是最新版本 $current');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      navigator.pop();
+      _showSnack('检查更新失败：$e');
+    }
+  }
+
+  /// 有新版本时的更新对话框：版本号、Release 名称、更新说明、下载按钮。
+  Future<void> _showUpdateDialog(UpdateInfo update) async {
+    final canDownload = update.apkUrl != null && update.apkUrl!.isNotEmpty;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('发现新版本 ${update.version}'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (update.name.isNotEmpty && update.name != update.version)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    update.name,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                ),
+              Text(
+                update.body.isEmpty ? '暂无更新说明' : update.body,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('稍后'),
+          ),
+          if (canDownload)
+            FilledButton.icon(
+              onPressed: () => _downloadApk(update.apkUrl!),
+              icon: const Icon(Icons.download),
+              label: const Text('下载 APK'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 打开 APK 下载链接（浏览器/外部应用）。
+  Future<void> _downloadApk(String url) async {
+    final uri = Uri.parse(url);
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && mounted) {
+      _showSnack('无法打开下载链接：$url');
+    }
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// 编辑全局默认参数（PRD 4.5.1：temperature/max_tokens/top_p/system_prompt）。

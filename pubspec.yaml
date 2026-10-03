@@ -1,7 +1,7 @@
 name: llm_chat_app
 description: "LLM Chat App：Flutter 跨平台第三方 LLM 对话客户端（微信风格界面，支持 OpenAI 兼容 API、主动消息、局域网双端同步）。详见 PRD 第 1-9 章。"
 publish_to: "none"
-version: 1.0.8
+version: 1.0.9
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -50,6 +50,11 @@ dependencies:
   # PRD 2.4 中的 P1 依赖（按需添加）：
   # url_launcher / file_picker / image_picker / workmanager /
   # android_alarm_manager_plus / logger
+
+  # 检查更新（P2）：当前版本号由 lib/core/constants.dart 的 appVersion 维护，
+  # 与 pubspec version 保持一致（避免引入 package_info_plus 的 Kotlin/AGP 兼容问题）。
+  # 检查更新（P2）：打开 APK 下载链接
+  url_launcher: ^6.3.0
 
 # 依赖覆盖：path_provider_foundation 2.5+ 与 sqlite3 3.x 引入 native assets
 # （objective_c / code_assets hook），构建 macOS 目标需要完整 Xcode/工具链。

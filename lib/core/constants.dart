@@ -3,6 +3,9 @@ abstract final class AppConstants {
   /// 应用名
   static const String appName = 'LLM Chat';
 
+  /// 当前应用版本号（与 pubspec.yaml 的 version 保持一致；检查更新时与远端 tag 比对）
+  static const String appVersion = '1.0.9';
+
   /// 未绑定 API 配置时的会话标题
   static const String defaultConversationTitle = '新会话';
 
