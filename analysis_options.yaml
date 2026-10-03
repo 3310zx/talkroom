@@ -1,0 +1,19 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # 骨架阶段允许使用非 const 构造，便于快速迭代
+    prefer_const_constructors: false
+    prefer_const_literals_to_create_immutables: false
+
+analyzer:
+  errors:
+    todo: ignore
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**

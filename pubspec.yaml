@@ -1,0 +1,75 @@
+name: llm_chat_app
+description: "LLM Chat App：Flutter 跨平台第三方 LLM 对话客户端（微信风格界面，支持 OpenAI 兼容 API、主动消息、局域网双端同步）。详见 PRD 第 1-9 章。"
+publish_to: "none"
+version: 1.0.8
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 状态管理（PRD 2.2）
+  flutter_riverpod: ^2.5.1
+
+  # HTTP / SSE（PRD 2.4 P0）
+  dio: ^5.4.0
+
+  # Markdown 渲染（聊天消息，PRD 2.4 P0）
+  flutter_markdown: ^0.7.1
+  markdown: ^7.3.1 # flutter_markdown 的 MarkdownElementBuilder 直接依赖（message_bubble 代码块高亮）
+
+  # 代码块高亮（聊天消息代码块，PRD 2.4 P0）
+  flutter_highlight: ^0.7.0
+
+  # 本地存储（PRD 2.3）
+  # SQLite（移动端 sqflite / 桌面端 sqflite_common_ffi）
+  sqflite: ^2.3.2
+  sqflite_common_ffi: ^2.3.0
+  # key-value 缓存（应用设置/轻量状态）
+  hive_ce: ^2.5.0
+  path_provider: ^2.1.2
+
+  # API Key 加密存储（PRD 6.2）
+  flutter_secure_storage: ^9.2.0
+
+  # 设备/会话唯一标识（局域网同步 devices.device_id，PRD 第 7 章）
+  uuid: ^4.4.0
+
+  # 局域网本地服务器（PRD 第 7 章，Dart shelf）
+  shelf: ^1.4.1
+  shelf_router: ^1.1.4
+
+  # 本地通知（PRD 第 5 章 P1「LLM 主动发消息」：生成完成/失败提醒、点击跳转会话）
+  # 注意：新增依赖后需重新执行 flutter pub get
+  # 说明：锁定 16.x 而非 17.x——17.x 引入 objective_c native assets，
+  #   构建 macOS 目标需要完整 Xcode；16.x 使用传统插件注册，兼容无完整 Xcode 环境。
+  flutter_local_notifications: ^16.3.2
+
+  # PRD 2.4 中的 P1 依赖（按需添加）：
+  # url_launcher / file_picker / image_picker / workmanager /
+  # android_alarm_manager_plus / logger
+
+# 依赖覆盖：path_provider_foundation 2.5+ 与 sqlite3 3.x 引入 native assets
+# （objective_c / code_assets hook），构建 macOS 目标需要完整 Xcode/工具链。
+# 固定 2.4.1 / 2.4.6 使用传统 FFI（运行时加载系统库），保证无完整工具链可编译运行。
+dependency_overrides:
+  path_provider_foundation: 2.4.1
+  sqlite3: 3.5.2
+  path_provider_android: 2.2.11
+
+# sqlite3 hook 构建配置：使用操作系统自带 SQLite（macOS/Windows/Linux 均有），
+# 避免构建/测试阶段从 GitHub 下载预编译 dylib（离线/内网环境可用）。
+hooks:
+  user_defines:
+    sqlite3:
+      source: system
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
