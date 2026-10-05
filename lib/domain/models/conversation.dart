@@ -9,6 +9,13 @@ class Conversation {
   final int? maxTokens;
   final double? topP;
   final bool pinned;
+
+  /// 是否已归档（v1.0.13 / DB version 5 起；归档会话移入归档列表，可从归档恢复）
+  final bool archived;
+
+  /// 会话默认 System Prompt 模板 id（v1.0.13 / DB version 5 起；null 表示跟随全局设置）
+  final int? promptTemplateId;
+
   final String lastMessage;
   final int updatedAt;
   final int createdAt;
@@ -23,6 +30,8 @@ class Conversation {
     this.maxTokens,
     this.topP,
     this.pinned = false,
+    this.archived = false,
+    this.promptTemplateId,
     this.lastMessage = '',
     required this.updatedAt,
     required this.createdAt,
@@ -38,6 +47,8 @@ class Conversation {
     int? maxTokens,
     double? topP,
     bool? pinned,
+    bool? archived,
+    int? promptTemplateId,
     String? lastMessage,
     int? updatedAt,
     int? createdAt,
@@ -52,6 +63,8 @@ class Conversation {
       maxTokens: maxTokens ?? this.maxTokens,
       topP: topP ?? this.topP,
       pinned: pinned ?? this.pinned,
+      archived: archived ?? this.archived,
+      promptTemplateId: promptTemplateId ?? this.promptTemplateId,
       lastMessage: lastMessage ?? this.lastMessage,
       updatedAt: updatedAt ?? this.updatedAt,
       createdAt: createdAt ?? this.createdAt,
@@ -69,6 +82,8 @@ class Conversation {
       'max_tokens': maxTokens,
       'top_p': topP,
       'pinned': pinned ? 1 : 0,
+      'archived': archived ? 1 : 0,
+      'prompt_template_id': promptTemplateId,
       'last_message': lastMessage,
       'updated_at': updatedAt,
       'created_at': createdAt,
@@ -86,6 +101,8 @@ class Conversation {
       maxTokens: map['max_tokens'] as int?,
       topP: (map['top_p'] as num?)?.toDouble(),
       pinned: (map['pinned'] as int? ?? 0) == 1,
+      archived: (map['archived'] as int? ?? 0) == 1,
+      promptTemplateId: map['prompt_template_id'] as int?,
       lastMessage: map['last_message'] as String? ?? '',
       updatedAt: map['updated_at'] as int? ?? 0,
       createdAt: map['created_at'] as int? ?? 0,

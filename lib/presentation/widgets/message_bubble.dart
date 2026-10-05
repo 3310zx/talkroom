@@ -1,19 +1,24 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/atom-one-light.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:markdown/markdown.dart' as md;
+import 'package:share_plus/share_plus.dart';
 
 /// 消息气泡（微信风格：左侧 AI、右侧用户）。
 ///
 /// - 用户消息：右侧纯文本气泡；
 /// - 助手消息：左侧 Markdown 渲染气泡（`flutter_markdown` + `flutter_highlight`
-///   代码块高亮，识别 language 标签，深/浅色主题自适应）；
+///   代码块高亮，识别 language 标签，深/浅色主题自适应；LaTeX 公式
+///   `$$...$$` / `$...$` 经 flutter_math_fork 渲染为公式形态）；
 /// - 思维链：`reasoningContent` 非空时以「思考过程 · 用时 X.Xs · 消耗 N tokens」
 ///   折叠卡片展示（默认收起，点击展开），与正文明显区分；
 /// - 错误态：`status == 'error'` 显示错误边框与中文错误摘要 + 重试按钮；
-/// - 停止态：`status == 'stopped'` 保留已生成内容并标注「已停止生成」。
+/// - 停止态：`status == 'stopped'` 保留已生成内容并标注「已停止生成」；
+/// - 长按菜单（R3）：复制 / 重新生成 / 编辑（仅用户）/ 删除 / 引用 / 分享。
 class MessageBubble extends StatelessWidget {
   const MessageBubble({
     super.key,
@@ -25,6 +30,10 @@ class MessageBubble extends StatelessWidget {
     this.reasoningContent,
     this.reasoningDurationMs,
     this.reasoningTokens,
+    this.onRegenerate,
+    this.onEdit,
+    this.onDelete,
+    this.onQuote,
   });
 
   final bool isUser;
@@ -42,6 +51,19 @@ class MessageBubble extends StatelessWidget {
   /// 思考消耗 token 数（usage 缺失时为估算值），为空则不显示
   final int? reasoningTokens;
 
+  // ---- 长按菜单（R3） ----
+  /// 重新生成（重新发起该请求生成新回复）
+  final VoidCallback? onRegenerate;
+
+  /// 编辑原文重发（仅用户消息传入）
+  final VoidCallback? onEdit;
+
+  /// 删除该条消息
+  final VoidCallback? onDelete;
+
+  /// 以引用块样式带入输入框
+  final VoidCallback? onQuote;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -58,101 +80,206 @@ class MessageBubble extends StatelessWidget {
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        constraints: const BoxConstraints(maxWidth: 560),
-        decoration: BoxDecoration(
-          color: bubbleColor,
-          border: isError
-              ? Border.all(color: theme.colorScheme.error, width: 1)
-              : null,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 思维链折叠卡片：灰色底、斜体小字、分隔线，与正文明显区分。
-            if (hasReasoning && !isUser) ...[
-              _ReasoningCard(
-                content: reasoningContent!,
-                durationMs: reasoningDurationMs,
-                tokens: reasoningTokens,
-              ),
+      child: GestureDetector(
+        onLongPress: () => _showActionMenu(context),
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          constraints: const BoxConstraints(maxWidth: 560),
+          decoration: BoxDecoration(
+            color: bubbleColor,
+            border: isError
+                ? Border.all(color: theme.colorScheme.error, width: 1)
+                : null,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 思维链折叠卡片：灰色底、斜体小字、分隔线，与正文明显区分。
+              if (hasReasoning && !isUser) ...[
+                _ReasoningCard(
+                  content: reasoningContent!,
+                  durationMs: reasoningDurationMs,
+                  tokens: reasoningTokens,
+                ),
+                if (content.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Divider(
+                      height: 1,
+                      color: theme.colorScheme.outlineVariant,
+                    ),
+                  ),
+              ],
+              // 统一渲染：用户消息与助手消息都经 flutter_markdown 渲染，
+              // 避免标题/列表/加粗等基础语法在部分消息中显示为原始标记符号。
+              // 数学公式（R1）：注册 math_block / math_inline 语法与构建器，
+              // 块级 $$...$$ 与行内 $...$ 渲染为公式形态而非纯文本。
               if (content.trim().isNotEmpty)
+                MarkdownBody(
+                  data: content,
+                  selectable: true,
+                  extensionSet: md.ExtensionSet(
+                    md.ExtensionSet.gitHubFlavored.blockSyntaxes +
+                        [_MathBlockSyntax()],
+                    md.ExtensionSet.gitHubFlavored.inlineSyntaxes +
+                        [_MathInlineSyntax()],
+                  ),
+                  builders: {
+                    'pre': _CodeBlockBuilder(),
+                    'math_block': _MathBuilder(inline: false),
+                    'math_inline': _MathBuilder(inline: true),
+                  },
+                  styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+                    p: theme.textTheme.bodyLarge,
+                  ),
+                )
+              else if (!hasReasoning)
+                Text(
+                  isStreaming ? '正在思考…' : '',
+                  style: theme.textTheme.bodyLarge,
+                ),
+              if (isStreaming)
                 Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Divider(
-                    height: 1,
-                    color: theme.colorScheme.outlineVariant,
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 6),
+                      const Text('生成中…', style: TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ),
+              if (isStopped)
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Text(
+                    '已停止生成',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ),
+              if (isError && errorMessage != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    errorMessage!,
+                    style: TextStyle(fontSize: 12, color: theme.colorScheme.error),
+                  ),
+                ),
+              if (isError && onRetry != null)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: onRetry,
+                    child: const Text('重试'),
                   ),
                 ),
             ],
-            // 统一渲染：用户消息与助手消息都经 flutter_markdown 渲染，
-            // 避免标题/列表/加粗等基础语法在部分消息中显示为原始标记符号。
-            if (content.trim().isNotEmpty)
-              MarkdownBody(
-                data: content,
-                selectable: true,
-                builders: {
-                  'pre': _CodeBlockBuilder(),
-                },
-                styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-                  p: theme.textTheme.bodyLarge,
-                ),
-              )
-            else if (!hasReasoning)
-              Text(
-                isStreaming ? '正在思考…' : '',
-                style: theme.textTheme.bodyLarge,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 长按消息气泡弹出操作菜单（R3）：
+  /// 复制 / 重新生成 / 编辑（仅用户）/ 删除 / 引用 / 分享。
+  /// 复制与分享在气泡内直接完成；重新生成/编辑/删除/引用由上层回调驱动
+  /// （回调未传入时对应菜单项隐藏）。
+  void _showActionMenu(BuildContext context) {
+    final theme = Theme.of(context);
+    final items = <Widget>[
+      ListTile(
+        leading: const Icon(Icons.copy),
+        title: const Text('复制'),
+        onTap: () {
+          Navigator.of(context).pop();
+          _copyContent(context);
+        },
+      ),
+      if (onRegenerate != null)
+        ListTile(
+          leading: const Icon(Icons.refresh),
+          title: const Text('重新生成'),
+          onTap: () {
+            Navigator.of(context).pop();
+            onRegenerate!();
+          },
+        ),
+      if (onEdit != null)
+        ListTile(
+          leading: const Icon(Icons.edit_outlined),
+          title: const Text('编辑'),
+          onTap: () {
+            Navigator.of(context).pop();
+            onEdit!();
+          },
+        ),
+      if (onDelete != null)
+        ListTile(
+          leading: Icon(Icons.delete_outline, color: theme.colorScheme.error),
+          title: Text('删除', style: TextStyle(color: theme.colorScheme.error)),
+          onTap: () {
+            Navigator.of(context).pop();
+            onDelete!();
+          },
+        ),
+      if (onQuote != null)
+        ListTile(
+          leading: const Icon(Icons.format_quote),
+          title: const Text('引用'),
+          onTap: () {
+            Navigator.of(context).pop();
+            onQuote!();
+          },
+        ),
+      ListTile(
+        leading: const Icon(Icons.share_outlined),
+        title: const Text('分享'),
+        onTap: () {
+          Navigator.of(context).pop();
+          Share.share(content, subject: 'LLM Chat 消息');
+        },
+      ),
+    ];
+
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+              child: Text(
+                isUser ? '消息操作' : '消息操作',
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold),
               ),
-            if (isStreaming)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(
-                      width: 12,
-                      height: 12,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                    const SizedBox(width: 6),
-                    const Text('生成中…', style: TextStyle(fontSize: 12)),
-                  ],
-                ),
-              ),
-            if (isStopped)
-              const Padding(
-                padding: EdgeInsets.only(top: 4),
-                child: Text(
-                  '已停止生成',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                ),
-              ),
-            if (isError && errorMessage != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  errorMessage!,
-                  style: TextStyle(fontSize: 12, color: theme.colorScheme.error),
-                ),
-              ),
-            if (isError && onRetry != null)
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: onRetry,
-                  child: const Text('重试'),
-                ),
-              ),
+            ),
+            ...items,
+            const SizedBox(height: 8),
           ],
         ),
       ),
     );
   }
 
+  Future<void> _copyContent(BuildContext context) async {
+    await Clipboard.setData(ClipboardData(text: content));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('已复制'), duration: Duration(seconds: 1)));
+  }
 }
 
 /// 思维链折叠卡片（默认收起，点击标题展开/收起）。
@@ -284,11 +411,19 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
 /// 代码块高亮视图（PRD 2.4 P0）：识别语言标签后用 `flutter_highlight`
 /// 渲染，深 / 浅色主题随应用 Theme.brightness 切换；
 /// 未知语言或未标注语言时回退 plaintext（安全降级）。
-class _CodeBlockView extends StatelessWidget {
+/// 右上角提供「一键复制」按钮（R2）：点击复制全文并短暂提示「已复制」。
+class _CodeBlockView extends StatefulWidget {
   const _CodeBlockView({required this.source, this.language});
 
   final String source;
   final String? language;
+
+  @override
+  State<_CodeBlockView> createState() => _CodeBlockViewState();
+}
+
+class _CodeBlockViewState extends State<_CodeBlockView> {
+  bool _copied = false;
 
   /// highlight 内置支持的语言关键字；未知一律回退 plaintext。
   static const Set<String> _knownLanguages = {
@@ -351,14 +486,24 @@ class _CodeBlockView extends StatelessWidget {
   };
 
   String get _resolvedLanguage {
-    final lang = language?.toLowerCase() ?? '';
+    final lang = widget.language?.toLowerCase() ?? '';
     return _knownLanguages.contains(lang) ? lang : 'plaintext';
+  }
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: widget.source));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (mounted) setState(() => _copied = false);
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final resolved = _resolvedLanguage;
+    final headerColor = isDark ? const Color(0xFF2D2D2D) : const Color(0xFFE8E8E8);
+    final labelColor = isDark ? Colors.white70 : Colors.black54;
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
       width: double.infinity,
@@ -374,31 +519,136 @@ class _CodeBlockView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (resolved != 'plaintext')
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              color: isDark ? const Color(0xFF2D2D2D) : const Color(0xFFE8E8E8),
-              child: Text(
-                resolved,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontFamily: 'monospace',
-                  color: isDark ? Colors.white70 : Colors.black54,
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+            color: headerColor,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    resolved == 'plaintext' ? 'code' : resolved,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                      color: labelColor,
+                    ),
+                  ),
                 ),
-              ),
+                // 一键复制（R2）：点击复制全文，短暂显示「已复制」。
+                InkWell(
+                  onTap: _copied ? null : _copy,
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _copied ? Icons.check : Icons.copy,
+                          size: 14,
+                          color: _copied
+                              ? (isDark ? Colors.greenAccent : Colors.green)
+                              : labelColor,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _copied ? '已复制' : '复制',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: _copied
+                                ? (isDark ? Colors.greenAccent : Colors.green)
+                                : labelColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
+          ),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.all(10),
             child: HighlightView(
-              source,
+              widget.source,
               language: resolved,
               theme: isDark ? atomOneDarkTheme : atomOneLightTheme,
               padding: EdgeInsets.zero,
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 数学公式块级语法：行首 `$$` 起，至下一个 `$$`（或文档末尾）为块级
+/// LaTeX 公式（PRD 2.4 / R1），构建为 `math_block` 元素交给 [_MathBuilder]。
+class _MathBlockSyntax extends md.BlockSyntax {
+  @override
+  RegExp get pattern => RegExp(r'^\$\$');
+
+  @override
+  bool canEndBlock(md.BlockParser parser) => true;
+
+  @override
+  md.Node parse(md.BlockParser parser) {
+    final buffer = StringBuffer();
+    parser.advance(); // 消费起始 $$
+    while (parser.peek(0) != null) {
+      final line = parser.peek(0)!;
+      final text = line.content.trimRight();
+      if (text.trim().startsWith(r'$$')) {
+        parser.advance();
+        break;
+      }
+      if (buffer.isNotEmpty) buffer.write('\n');
+      buffer.write(text);
+      parser.advance();
+    }
+    return md.Element('math_block', [md.Text(buffer.toString())]);
+  }
+}
+
+/// 数学公式行内语法：`$...$` 渲染为行内 LaTeX 公式（R1）。
+/// 负向断言避免把 `$$...$$` 块级分隔符误当作行内公式起点/终点。
+class _MathInlineSyntax extends md.InlineSyntax {
+  _MathInlineSyntax() : super(r'(?<!\$)\$([^\n$]+)\$(?!\$)');
+
+  @override
+  bool onMatch(md.InlineParser parser, Match match) {
+    final element = md.Element('math_inline', [md.Text(match[1]!)]);
+    parser.addNode(element);
+    return true;
+  }
+}
+
+/// 数学公式构建器：将 LaTeX 源码交给 flutter_math_fork 渲染为公式形态。
+class _MathBuilder extends MarkdownElementBuilder {
+  _MathBuilder({required this.inline});
+
+  final bool inline;
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final tex = element.textContent.trim();
+    if (tex.isEmpty) return null;
+    return Padding(
+      padding: inline ? EdgeInsets.zero : const EdgeInsets.symmetric(vertical: 4),
+      child: Math.tex(
+        tex,
+        mathStyle: inline ? MathStyle.text : MathStyle.display,
+        textStyle: TextStyle(
+          fontSize: inline ? 14 : 16,
+          color: Theme.of(context).colorScheme.onSurface,
+        ),
       ),
     );
   }

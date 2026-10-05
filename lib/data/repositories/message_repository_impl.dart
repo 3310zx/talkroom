@@ -62,6 +62,17 @@ class MessageRepositoryImpl implements MessageRepository {
     await _appDatabase.db.delete('messages', where: 'id = ?', whereArgs: [id]);
   }
 
+  @override
+  Future<void> deleteFrom(int id) async {
+    final msg = await getById(id);
+    if (msg == null) return;
+    await _appDatabase.db.delete(
+      'messages',
+      where: 'conversation_id = ? AND id >= ?',
+      whereArgs: [msg.conversationId, id],
+    );
+  }
+
   // ---- 缓存命中记录（设置页「命中缓存」） ----
 
   @override

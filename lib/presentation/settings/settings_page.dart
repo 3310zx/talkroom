@@ -15,6 +15,7 @@ import '../../services/update_service.dart';
 import '../active_tasks/active_tasks_page.dart';
 import '../api_config/api_config_list_page.dart';
 import '../cache_hits/cache_hits_page.dart';
+import '../prompt_templates/prompt_templates_page.dart';
 import '../sync/local_server_page.dart';
 import '../sync/sync_setup_page.dart';
 
@@ -176,11 +177,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
             onTap: _editDefaultParams,
           ),
-          const ListTile(
-            leading: Icon(Icons.person_outline),
-            title: Text('System Prompt 预设'),
-            subtitle: Text('TODO(M0)：提示词模板管理'),
-            enabled: false,
+          ListTile(
+            leading: const Icon(Icons.person_outline),
+            title: const Text('System Prompt 模板'),
+            subtitle: const Text('创建 / 编辑 / 切换模板，导入导出（JSON / 文本）'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const PromptTemplatesPage(),
+              ),
+            ),
           ),
 
           const Divider(),

@@ -6,6 +6,7 @@ import '../../domain/repositories/api_config_repository.dart';
 import '../../domain/repositories/conversation_repository.dart';
 import '../../domain/repositories/device_repository.dart';
 import '../../domain/repositories/message_repository.dart';
+import '../../domain/repositories/prompt_template_repository.dart';
 import '../../domain/repositories/settings_repository.dart';
 import '../../domain/repositories/sync_cursor_repository.dart';
 import '../repositories/active_task_repository_impl.dart';
@@ -13,6 +14,7 @@ import '../repositories/api_config_repository_impl.dart';
 import '../repositories/conversation_repository_impl.dart';
 import '../repositories/device_repository_impl.dart';
 import '../repositories/message_repository_impl.dart';
+import '../repositories/prompt_template_repository_impl.dart';
 import '../repositories/settings_repository_impl.dart';
 import '../repositories/sync_cursor_repository_impl.dart';
 
@@ -34,7 +36,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -75,6 +77,8 @@ class AppDatabase {
         max_tokens    INTEGER,
         top_p         REAL,
         pinned        INTEGER NOT NULL DEFAULT 0,
+        archived      INTEGER NOT NULL DEFAULT 0,
+        prompt_template_id INTEGER,
         last_message  TEXT,
         updated_at    INTEGER NOT NULL,
         created_at    INTEGER NOT NULL
@@ -274,6 +278,7 @@ class AppDatabase {
   late final ApiConfigRepository apiConfigRepository = ApiConfigRepositoryImpl(this);
   late final ConversationRepository conversationRepository = ConversationRepositoryImpl(this);
   late final MessageRepository messageRepository = MessageRepositoryImpl(this);
+  late final PromptTemplateRepository promptTemplateRepository = PromptTemplateRepositoryImpl(this);
   late final SettingsRepository settingsRepository = SettingsRepositoryImpl(this);
   late final DeviceRepository deviceRepository = DeviceRepositoryImpl(this);
   late final SyncCursorRepository syncCursorRepository = SyncCursorRepositoryImpl(this);

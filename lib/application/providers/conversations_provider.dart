@@ -41,4 +41,21 @@ class ConversationsNotifier extends StateNotifier<List<Conversation>> {
   Future<void> togglePinned(Conversation conversation) async {
     await update(conversation.copyWith(pinned: !conversation.pinned));
   }
+
+  /// 归档 / 恢复会话（R10：归档会话移入归档列表，可从归档恢复）。
+  Future<void> toggleArchive(Conversation conversation) async {
+    await update(conversation.copyWith(archived: !conversation.archived));
+  }
+
+  /// 重命名会话标题（R10）。
+  Future<void> rename(Conversation conversation, String newTitle) async {
+    final title = newTitle.trim();
+    if (title.isEmpty) return;
+    await update(conversation.copyWith(title: title));
+  }
+
+  /// 设置会话默认 System Prompt 模板（R13；templateId 为 null 表示跟随全局设置）。
+  Future<void> setPromptTemplate(Conversation conversation, int? templateId) async {
+    await update(conversation.copyWith(promptTemplateId: templateId));
+  }
 }

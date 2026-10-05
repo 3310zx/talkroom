@@ -15,6 +15,9 @@ abstract class MessageRepository {
   /// 删除单条消息
   Future<void> delete(int id);
 
+  /// 删除某条消息及其之后的所有消息（同会话，编辑重发 / 重新生成时清理旧回复）
+  Future<void> deleteFrom(int id);
+
   // ---- 局域网同步（PRD 第 7 章） ----
 
   /// 服务器权威库：拉取某会话 `server_id > afterServerId` 的增量消息（升序）

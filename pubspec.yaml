@@ -1,7 +1,7 @@
 name: llm_chat_app
 description: "LLM Chat App：Flutter 跨平台第三方 LLM 对话客户端（微信风格界面，支持 OpenAI 兼容 API、主动消息、局域网双端同步）。详见 PRD 第 1-9 章。"
 publish_to: "none"
-version: 1.0.12
+version: 1.0.13
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -22,6 +22,12 @@ dependencies:
 
   # 代码块高亮（聊天消息代码块，PRD 2.4 P0）
   flutter_highlight: ^0.7.0
+
+  # 数学公式渲染（PRD 2.4 P1 提升：LaTeX $$块$$/$行内$，v1.0.13 起 P0）
+  flutter_math_fork: ^0.7.2
+
+  # 系统分享文本（PRD 2.4 / R3 消息菜单「分享」）
+  share_plus: ^7.2.2
 
   # 本地存储（PRD 2.3）
   # SQLite（移动端 sqflite / 桌面端 sqflite_common_ffi）

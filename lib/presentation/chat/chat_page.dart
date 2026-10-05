@@ -39,6 +39,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   bool _isSending = false;
   int? _currentAssistantId;
 
+  /// R3「引用」：被引用消息的原文（输入框上方展示引用预览条，可取消）。
+  String? _quoteContent;
+
   /// 是否已对 API 配置触发过「空态兜底加载」，防止 provider 未初始化/
   /// 加载失败时首页长期误显示「尚未添加 API 配置」。
   bool _apiEmptyLoadTriggered = false;
@@ -137,6 +140,18 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             reasoningContent: message.reasoningContent,
                             reasoningDurationMs: message.reasoningDurationMs,
                             reasoningTokens: message.reasoningTokens,
+                            // R3 消息操作菜单回调：
+                            // 重新生成（仅已完成的助手消息）/ 编辑（仅用户消息）/
+                            // 删除 / 引用；对应菜单项在回调为 null 时自动隐藏。
+                            onRegenerate: message.role == 'assistant' &&
+                                    message.status == 'done'
+                                ? () => _regenerate(message)
+                                : null,
+                            onEdit: message.role == 'user'
+                                ? () => _editMessage(message)
+                                : null,
+                            onDelete: () => _deleteMessage(message),
+                            onQuote: () => _quoteMessage(message),
                           );
                         },
                       ),
@@ -194,40 +209,86 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   Widget _buildInputBar(BuildContext context) {
+    final theme = Theme.of(context);
+    final quote = _quoteContent;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: TextField(
-                controller: _inputController,
-                minLines: 1,
-                maxLines: 4,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) {
-                  if (!_isSending) _send();
-                },
-                decoration: const InputDecoration(
-                  hintText: '输入消息…',
-                  border: OutlineInputBorder(),
-                  isDense: true,
+            // 引用预览条（R3）：引用内容带入输入框时展示，可一键取消。
+            if (quote != null && quote.trim().isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(bottom: 4),
+                padding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.format_quote,
+                      size: 16,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _quotePreview(quote),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      tooltip: '取消引用',
+                      color: theme.colorScheme.onSurfaceVariant,
+                      onPressed: () => setState(() => _quoteContent = null),
+                    ),
+                  ],
                 ),
               ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _inputController,
+                    // R6 多行输入：自动增高，最大约 6 行，发送后重置高度。
+                    minLines: 1,
+                    maxLines: 6,
+                    textInputAction: TextInputAction.newline,
+                    onSubmitted: (_) {
+                      if (!_isSending) _send();
+                    },
+                    decoration: const InputDecoration(
+                      hintText: '输入消息…',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // R7 停止生成：生成过程中发送按钮变为「停止」按钮，可中断 SSE。
+                if (_isSending)
+                  IconButton.filled(
+                    onPressed: _stop,
+                    icon: const Icon(Icons.stop),
+                    tooltip: '停止生成',
+                  )
+                else
+                  IconButton.filled(
+                    onPressed: _send,
+                    icon: const Icon(Icons.send),
+                    tooltip: '发送',
+                  ),
+              ],
             ),
-            const SizedBox(width: 8),
-            if (_isSending)
-              IconButton.filled(
-                onPressed: _stop,
-                icon: const Icon(Icons.stop),
-                tooltip: '停止生成',
-              )
-            else
-              IconButton.filled(
-                onPressed: _send,
-                icon: const Icon(Icons.send),
-                tooltip: '发送',
-              ),
           ],
         ),
       ),
@@ -294,6 +355,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       }
 
       // 5) 参数来源：会话覆盖值优先，否则取 settings 表全局默认（PRD 4.5.1）。
+      //    R13：会话设置了默认模板时，模板内容作为 system prompt（优先于全局设置）。
       final settings = ref.read(settingsProvider);
       final temperature = conv.temperature ??
           _doubleSetting(
@@ -303,7 +365,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               settings, AppConstants.settingMaxTokens, AppConstants.defaultMaxTokens);
       final topP = conv.topP ??
           _doubleSetting(settings, AppConstants.settingTopP, AppConstants.defaultTopP);
-      final systemPrompt = conv.systemPrompt ?? settings[AppConstants.settingSystemPrompt];
+      var systemPrompt = conv.systemPrompt ?? settings[AppConstants.settingSystemPrompt];
+      if (conv.promptTemplateId != null) {
+        final template = await ref
+            .read(appDatabaseProvider)
+            .promptTemplateRepository
+            .getById(conv.promptTemplateId!);
+        if (template != null && template.content.trim().isNotEmpty) {
+          systemPrompt = template.content;
+        }
+      }
 
       // 6) 组装上下文：system prompt + 最近 N 条 done 消息 + 本次（PRD 4.4.1）。
       final llmMessages = <Map<String, String>>[];
@@ -445,6 +516,114 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         return;
       }
     }
+  }
+
+  /// R3「重新生成」：删除该助手消息及其之后的所有消息，
+  /// 并用其之前最近一条用户消息重新发起请求。
+  Future<void> _regenerate(ChatMessage assistantMessage) async {
+    if (_isSending) {
+      _showSnack('正在生成回复，请稍候…');
+      return;
+    }
+    final msgs = ref.read(messagesProvider);
+    final index = msgs.indexWhere((m) => m.id == assistantMessage.id);
+    if (index < 0) return;
+    ChatMessage? userMessage;
+    for (var i = index - 1; i >= 0; i--) {
+      if (msgs[i].role == 'user') {
+        userMessage = msgs[i];
+        break;
+      }
+    }
+    if (userMessage == null) return;
+    await ref.read(messagesProvider.notifier).deleteFrom(userMessage.id!);
+    await _send(userMessage.content);
+  }
+
+  /// R3「编辑」（仅用户消息）：弹窗编辑原文，保存后删除该消息及之后
+  /// 的所有消息，用新内容重新发送生成新回复。
+  Future<void> _editMessage(ChatMessage message) async {
+    if (_isSending) {
+      _showSnack('正在生成回复，请稍候…');
+      return;
+    }
+    final controller = TextEditingController(text: message.content);
+    final newText = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('编辑消息'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 2,
+          maxLines: 6,
+          decoration: const InputDecoration(
+            hintText: '输入修改后的内容',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+            child: const Text('保存并重发'),
+          ),
+        ],
+      ),
+    );
+    final trimmed = newText?.trim() ?? '';
+    if (trimmed.isEmpty) return;
+    await ref.read(messagesProvider.notifier).deleteFrom(message.id!);
+    await _send(trimmed);
+  }
+
+  /// R3「删除」：确认后删除该条消息；若删除的是正在流式生成的
+  /// 助手消息，同时中断生成。
+  Future<void> _deleteMessage(ChatMessage message) async {
+    if (_isSending) {
+      _showSnack('正在生成回复，请稍候…');
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除消息'),
+        content: const Text('确定删除这条消息吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (message.id != null && message.id == _currentAssistantId) {
+      _stop();
+    }
+    await ref.read(messagesProvider.notifier).remove(message);
+  }
+
+  /// R3「引用」：将消息内容以引用块样式带入输入框（可取消）。
+  void _quoteMessage(ChatMessage message) {
+    setState(() => _quoteContent = message.content);
+  }
+
+  /// 引用预览：压缩空白并截断，用于输入框上方预览条。
+  String _quotePreview(String content) {
+    var plain = content.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (plain.length > 40) plain = '${plain.substring(0, 40)}…';
+    return plain;
   }
 
   /// 刷新会话摘要与最后更新时间（会话列表自动联动）。

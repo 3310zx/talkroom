@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.llm_chat_app"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     buildToolsVersion = "36.0.0"
 
     compileOptions {

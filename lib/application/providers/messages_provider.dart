@@ -60,6 +60,21 @@ class MessagesNotifier extends StateNotifier<List<ChatMessage>> {
     ];
   }
 
+  /// 删除单条消息（R3 消息菜单「删除」）。
+  Future<void> remove(ChatMessage message) async {
+    final id = message.id;
+    if (id == null) return;
+    await _repository.delete(id);
+    state = [for (final m in state) if (m.id != id) m];
+  }
+
+  /// 删除某条消息及其之后的所有消息（R3「编辑重发 / 重新生成」：
+  /// 清理旧回复后再发起新请求）。
+  Future<void> deleteFrom(int messageId) async {
+    await _repository.deleteFrom(messageId);
+    state = [for (final m in state) if (m.id == null || m.id! < messageId) m];
+  }
+
   void clear() {
     state = const [];
   }
