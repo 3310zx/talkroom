@@ -99,6 +99,7 @@ class AppDatabase {
         completion_tokens   INTEGER,
         error_message       TEXT,
         created_at          INTEGER NOT NULL,
+        attachments         TEXT,
         reasoning_content   TEXT,
         reasoning_duration_ms INTEGER,
         reasoning_tokens    INTEGER,
@@ -106,6 +107,8 @@ class AppDatabase {
       )
     ''');
     await db.execute('CREATE INDEX idx_messages_conv ON messages(conversation_id, created_at)');
+    // 同步字段（PRD 7.4，幂等补充：旧库经 onUpgrade 走 _createSyncTables）
+    await _createSyncTables(db);
 
     await db.execute('''
       CREATE TABLE cache_hits (
@@ -216,6 +219,20 @@ class AppDatabase {
     // version 3 -> 4：思维链字段 + 缓存命中字段与 cache_hits 表
     if (oldVersion < 4) {
       await _migrateMessagesV4(db);
+    }
+    // version 5 -> 6：消息附件（R9 多模态图片/文件）
+    if (oldVersion < 6) {
+      await _migrateMessagesV6(db);
+    }
+  }
+
+  /// version 5 -> 6 迁移：`messages` 追加 `attachments` TEXT 列
+  /// （R9 消息附件 JSON：type/name/mime/size/data_base64/text_preview）。
+  Future<void> _migrateMessagesV6(Database db) async {
+    final cols = await db.rawQuery('PRAGMA table_info(messages)');
+    final existing = cols.map((c) => c['name'] as String).toSet();
+    if (!existing.contains('attachments')) {
+      await db.execute('ALTER TABLE messages ADD COLUMN attachments TEXT');
     }
   }
 

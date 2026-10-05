@@ -1,3 +1,86 @@
+import 'dart:convert';
+
+/// 消息附件（PRD 2.4 / R9：图片与文件上传）。
+///
+/// - 图片（type == 'image'）：`dataBase64` 保存压缩后的图片 Base64 数据，
+///   气泡缩略图与全屏预览直接解码渲染，发送时组装为 OpenAI 多模态
+///   `image_url`（data URL）；
+/// - 文件（type == 'file'）：`dataBase64` 为空，仅保存名称 / MIME / 大小 /
+///   文本预览，发送时以文本形式携带文件名与预览（模型不支持时中文提示）。
+class MessageAttachment {
+  final String type; // 'image' | 'file'
+  final String name;
+  final String? mimeType;
+  final int? sizeBytes;
+  final String? dataBase64; // 图片：base64 数据（不含 data: 前缀）
+  final String? textPreview; // 文件：文本类内容预览（前 N 字符）
+  final String? url; // 可选来源 URL（后续扩展）
+
+  const MessageAttachment({
+    required this.type,
+    required this.name,
+    this.mimeType,
+    this.sizeBytes,
+    this.dataBase64,
+    this.textPreview,
+    this.url,
+  });
+
+  bool get isImage => type == 'image';
+
+  /// OpenAI 兼容 image_url data URL（如 `data:image/jpeg;base64,...`）。
+  String? get imageDataUrl {
+    final data = dataBase64;
+    if (data == null || data.isEmpty) return null;
+    return 'data:${mimeType ?? 'image/jpeg'};base64,$data';
+  }
+
+  Map<String, Object?> toMap() {
+    return {
+      'type': type,
+      'name': name,
+      'mime_type': mimeType,
+      'size_bytes': sizeBytes,
+      'data_base64': dataBase64,
+      'text_preview': textPreview,
+      'url': url,
+    };
+  }
+
+  factory MessageAttachment.fromMap(Map<String, Object?> map) {
+    return MessageAttachment(
+      type: map['type'] as String? ?? 'file',
+      name: map['name'] as String? ?? '附件',
+      mimeType: map['mime_type'] as String?,
+      sizeBytes: map['size_bytes'] as int?,
+      dataBase64: map['data_base64'] as String?,
+      textPreview: map['text_preview'] as String?,
+      url: map['url'] as String?,
+    );
+  }
+
+  /// JSON 序列化（存 messages.attachments TEXT 列）。
+  static String? encodeList(List<MessageAttachment>? list) {
+    if (list == null || list.isEmpty) return null;
+    return jsonEncode(list.map((e) => e.toMap()).toList());
+  }
+
+  /// JSON 反序列化；null/空/损坏时安全返回空列表。
+  static List<MessageAttachment> decodeList(String? raw) {
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .map(MessageAttachment.fromMap)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+}
+
 /// 消息实体（对应 PRD 6.1.2 `messages` 表）。
 class ChatMessage {
   final int? id;
@@ -11,6 +94,9 @@ class ChatMessage {
   final int? completionTokens;
   final String? errorMessage;
   final int createdAt;
+
+  // R9：附件列表（图片/文件；仅用户消息可携带，历史消息发送时回放）。
+  final List<MessageAttachment> attachments;
 
   // 思维链与缓存命中（version 4 起；旧数据为 null / 0，模型层归一化兼容）：
   final String? reasoningContent; // 思维链文本（与正文分离展示）
@@ -35,6 +121,7 @@ class ChatMessage {
     this.completionTokens,
     this.errorMessage,
     required this.createdAt,
+    this.attachments = const [],
     this.reasoningContent,
     this.reasoningDurationMs,
     this.reasoningTokens,
@@ -56,6 +143,7 @@ class ChatMessage {
     int? completionTokens,
     String? errorMessage,
     int? createdAt,
+    List<MessageAttachment>? attachments,
     String? reasoningContent,
     int? reasoningDurationMs,
     int? reasoningTokens,
@@ -76,6 +164,7 @@ class ChatMessage {
       completionTokens: completionTokens ?? this.completionTokens,
       errorMessage: errorMessage ?? this.errorMessage,
       createdAt: createdAt ?? this.createdAt,
+      attachments: attachments ?? this.attachments,
       reasoningContent: reasoningContent ?? this.reasoningContent,
       reasoningDurationMs: reasoningDurationMs ?? this.reasoningDurationMs,
       reasoningTokens: reasoningTokens ?? this.reasoningTokens,
@@ -99,6 +188,7 @@ class ChatMessage {
       'completion_tokens': completionTokens,
       'error_message': errorMessage,
       'created_at': createdAt,
+      'attachments': MessageAttachment.encodeList(attachments),
       'reasoning_content': reasoningContent,
       'reasoning_duration_ms': reasoningDurationMs,
       'reasoning_tokens': reasoningTokens,
@@ -122,6 +212,7 @@ class ChatMessage {
       completionTokens: map['completion_tokens'] as int?,
       errorMessage: map['error_message'] as String?,
       createdAt: map['created_at'] as int? ?? 0,
+      attachments: MessageAttachment.decodeList(map['attachments'] as String?),
       reasoningContent: map['reasoning_content'] as String?,
       reasoningDurationMs: map['reasoning_duration_ms'] as int?,
       reasoningTokens: map['reasoning_tokens'] as int?,

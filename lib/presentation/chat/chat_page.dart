@@ -1,6 +1,13 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 
 import '../../application/providers/api_configs_provider.dart';
 import '../../application/providers/conversations_provider.dart';
@@ -42,14 +49,31 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   /// R3「引用」：被引用消息的原文（输入框上方展示引用预览条，可取消）。
   String? _quoteContent;
 
+  /// R9：已选择待发送的附件（相册图片 / 文件），展示在输入框上方可删除。
+  final List<MessageAttachment> _pendingAttachments = [];
+
+  /// R8：语音输入状态。
+  final SpeechToText _speech = SpeechToText();
+  bool _speechAvailable = false;
+  bool _speechInitialized = false;
+  bool _isListening = false;
+
   /// 是否已对 API 配置触发过「空态兜底加载」，防止 provider 未初始化/
   /// 加载失败时首页长期误显示「尚未添加 API 配置」。
   bool _apiEmptyLoadTriggered = false;
 
   @override
+  void initState() {
+    super.initState();
+    // R8：异步探测语音能力（设备/权限不可用时隐藏按钮，不崩溃）。
+    _initSpeech();
+  }
+
+  @override
   void dispose() {
     _inputController.dispose();
     _scrollController.dispose();
+    _speech.cancel();
     super.dispose();
   }
 
@@ -140,6 +164,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             reasoningContent: message.reasoningContent,
                             reasoningDurationMs: message.reasoningDurationMs,
                             reasoningTokens: message.reasoningTokens,
+                            attachments: message.attachments,
                             // R3 消息操作菜单回调：
                             // 重新生成（仅已完成的助手消息）/ 编辑（仅用户消息）/
                             // 删除 / 引用；对应菜单项在回调为 null 时自动隐藏。
@@ -217,6 +242,75 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // R9：待发送附件预览条（缩略图/文件卡片，可删除）。
+            if (_pendingAttachments.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(bottom: 4),
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: SizedBox(
+                  height: 56,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _pendingAttachments.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 6),
+                    itemBuilder: (context, index) {
+                      final att = _pendingAttachments[index];
+                      return Stack(
+                        children: [
+                          if (att.isImage && att.dataBase64 != null)
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: Image.memory(
+                                base64Decode(att.dataBase64!),
+                                width: 48,
+                                height: 48,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) =>
+                                    const Icon(Icons.image_outlined),
+                              ),
+                            )
+                          else
+                            Container(
+                              width: 48,
+                              height: 48,
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.surface,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                    color: theme.colorScheme.outlineVariant),
+                              ),
+                              child: Icon(
+                                Icons.insert_drive_file_outlined,
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          Positioned(
+                            top: -6,
+                            right: -6,
+                            child: InkWell(
+                              onTap: () => setState(
+                                  () => _pendingAttachments.removeAt(index)),
+                              child: Container(
+                                padding: const EdgeInsets.all(2),
+                                decoration: const BoxDecoration(
+                                  color: Colors.black54,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.close,
+                                    size: 12, color: Colors.white),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ),
             // 引用预览条（R3）：引用内容带入输入框时展示，可一键取消。
             if (quote != null && quote.trim().isNotEmpty)
               Container(
@@ -256,6 +350,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               ),
             Row(
               children: [
+                // R9：附件入口（相册图片 / 文件选择器）。
+                IconButton(
+                  onPressed: _showAttachmentMenu,
+                  icon: const Icon(Icons.add_circle_outline),
+                  tooltip: '添加图片或文件',
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 4),
                 Expanded(
                   child: TextField(
                     controller: _inputController,
@@ -273,7 +375,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
+                // R8：语音输入按钮。设备/权限不可用时隐藏，不崩溃。
+                if (_speechAvailable)
+                  IconButton(
+                    onPressed: _isListening ? _stopListening : _startListening,
+                    icon: Icon(
+                      _isListening ? Icons.graphic_eq : Icons.mic_none,
+                      color: _isListening
+                          ? theme.colorScheme.error
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    tooltip: _isListening ? '结束语音输入' : '语音输入',
+                  ),
+                const SizedBox(width: 4),
                 // R7 停止生成：生成过程中发送按钮变为「停止」按钮，可中断 SSE。
                 if (_isSending)
                   IconButton.filled(
@@ -298,9 +413,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   /// 发送消息：自动建会话 → 用户消息落库 → 流式请求 → 三态落库。
   Future<void> _send([String? preset]) async {
     final text = (preset ?? _inputController.text).trim();
-    if (text.isEmpty || _isSending) return;
+    // R9：附件与文本可同时发送；两者皆空才拦截。
+    final hasAttachments = _pendingAttachments.isNotEmpty;
+    if (text.isEmpty && !hasAttachments || _isSending) return;
     if (preset == null) _inputController.clear();
-    setState(() => _isSending = true);
+    final attachments =
+        preset == null ? List<MessageAttachment>.of(_pendingAttachments) : const <MessageAttachment>[];
+    setState(() {
+      _isSending = true;
+      if (preset == null) _pendingAttachments.clear();
+    });
     _currentAssistantId = null;
     _cancelToken = CancelToken();
 
@@ -325,6 +447,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             content: text,
             status: 'done',
             createdAt: now,
+            attachments: attachments,
           ));
       await _updateConversationMeta(conversationId, _summarize(text), now);
       _scrollToBottom();
@@ -377,7 +500,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       }
 
       // 6) 组装上下文：system prompt + 最近 N 条 done 消息 + 本次（PRD 4.4.1）。
-      final llmMessages = <Map<String, String>>[];
+      //    R9：含附件的用户消息按 OpenAI 多模态格式附加（image_url / file_url
+      //    文本块），纯文本消息保持 string content 兼容旧模型。
+      final llmMessages = <Map<String, dynamic>>[];
       if (systemPrompt != null && systemPrompt.trim().isNotEmpty) {
         llmMessages.add({'role': 'system', 'content': systemPrompt});
       }
@@ -391,10 +516,15 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       for (final m in recent) {
         llmMessages.add({
           'role': m.role == 'user' ? 'user' : 'assistant',
-          'content': m.content,
+          'content': m.role == 'user' && m.attachments.isNotEmpty
+              ? _buildMultimodalContent(m.content, m.attachments)
+              : m.content,
         });
       }
-      llmMessages.add({'role': 'user', 'content': text});
+      llmMessages.add({
+        'role': 'user',
+        'content': _buildMultimodalContent(text, attachments),
+      });
 
       // 7) SSE 流式请求：增量更新气泡。
       final result = await LlmClient().chatStream(
@@ -471,6 +601,243 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   /// 停止生成：取消当前 CancelToken，流式请求抛出 cancelled 后进入停止态。
   void _stop() {
     _cancelToken?.cancel();
+  }
+
+  // ── R8 语音输入 ──────────────────────────────────────────────
+
+  /// 初始化语音识别（R8）：设备不支持或权限被拒时隐藏按钮，不崩溃。
+  Future<void> _initSpeech() async {
+    if (_speechInitialized) return;
+    _speechInitialized = true;
+    try {
+      final ok = await _speech.initialize(
+        onStatus: (status) {
+          if (status == 'notListening' && _isListening) {
+            if (mounted) setState(() => _isListening = false);
+          }
+        },
+        onError: (error) {
+          if (mounted) setState(() => _isListening = false);
+        },
+      );
+      if (!mounted) return;
+      setState(() => _speechAvailable = ok);
+    } catch (_) {
+      if (mounted) setState(() => _speechAvailable = false);
+    }
+  }
+
+  Future<void> _startListening() async {
+    if (_isListening) return;
+    try {
+      final ok = await _speech.listen(
+        onResult: (result) {
+          if (!result.finalResult) return;
+          final recognized = result.recognizedWords.trim();
+          if (recognized.isEmpty) return;
+          final current = _inputController.text.trim();
+          _inputController.text = current.isEmpty
+              ? recognized
+              : '$current $recognized';
+          _inputController.selection = TextSelection.collapsed(
+            offset: _inputController.text.length,
+          );
+        },
+        listenOptions: SpeechListenOptions(
+          partialResults: true,
+          cancelOnError: true,
+          localeId: 'zh_CN',
+        ),
+      );
+      if (!mounted) return;
+      setState(() => _isListening = ok);
+      if (!ok) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('语音输入不可用，请检查麦克风权限')));
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isListening = false);
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('语音输入失败，请检查麦克风权限')));
+      }
+    }
+  }
+
+  void _stopListening() {
+    _speech.stop();
+    if (mounted) setState(() => _isListening = false);
+  }
+
+  // ── R9 附件上传 ──────────────────────────────────────────────
+
+  /// 附件入口菜单：从相册选择图片 / 选择文件。
+  Future<void> _showAttachmentMenu() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('从相册选择图片'),
+              onTap: () => Navigator.of(sheetContext).pop('image'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.attach_file),
+              title: const Text('选择文件'),
+              onTap: () => Navigator.of(sheetContext).pop('file'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == null || !mounted) return;
+    if (action == 'image') {
+      await _pickImageFromGallery();
+    } else {
+      await _pickFile();
+    }
+  }
+
+  /// 相册选图：读取原图并压缩为 Base64 图片附件（OpenAI image_url 兼容）。
+  Future<void> _pickImageFromGallery() async {
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 2048,
+        maxHeight: 2048,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _pendingAttachments.add(MessageAttachment(
+          type: 'image',
+          name: picked.name,
+          mimeType: 'image/jpeg',
+          sizeBytes: bytes.length,
+          dataBase64: base64Encode(bytes),
+        ));
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text('选择图片失败：$e')));
+      }
+    }
+  }
+
+  /// 文件选择器：读取文件为文件附件（附文本预览，便于模型理解）。
+  Future<void> _pickFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+      final file = result.files.first;
+      final bytes = file.bytes;
+      final path = file.path;
+      Uint8List? data = bytes;
+      if (data == null && path != null) {
+        data = await File(path).readAsBytes();
+      }
+      if (data == null) return;
+      final size = data.length;
+      final dataBase64 = size <= 20 * 1024 * 1024 ? base64Encode(data) : null;
+      // 文本类文件提取前 120 字符预览；其余跳过。
+      String? preview;
+      final lowerName = file.name.toLowerCase();
+      final isTextLike = lowerName.endsWith('.txt') ||
+          lowerName.endsWith('.md') ||
+          lowerName.endsWith('.json') ||
+          lowerName.endsWith('.yaml') ||
+          lowerName.endsWith('.yml') ||
+          lowerName.endsWith('.csv') ||
+          lowerName.endsWith('.log') ||
+          lowerName.endsWith('.xml') ||
+          lowerName.endsWith('.py') ||
+          lowerName.endsWith('.dart') ||
+          lowerName.endsWith('.js') ||
+          lowerName.endsWith('.ts') ||
+          lowerName.endsWith('.java') ||
+          lowerName.endsWith('.c') ||
+          lowerName.endsWith('.cpp') ||
+          lowerName.endsWith('.html') ||
+          lowerName.endsWith('.sql');
+      if (isTextLike && size < 512 * 1024) {
+        try {
+          final decoded = utf8.decode(data, allowMalformed: true);
+          preview = decoded.trim().replaceAll(RegExp(r'\s+'), ' ');
+          if (preview.length > 120) preview = preview.substring(0, 120);
+        } catch (_) {
+          preview = null;
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _pendingAttachments.add(MessageAttachment(
+          type: 'file',
+          name: file.name,
+          mimeType: file.extension?.isNotEmpty == true
+              ? 'application/${file.extension}'
+              : 'application/octet-stream',
+          sizeBytes: size,
+          dataBase64: dataBase64,
+          textPreview: preview,
+        ));
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text('选择文件失败：$e')));
+      }
+    }
+  }
+
+  /// R9：组装 OpenAI 兼容多模态 content。
+  ///
+  /// 无附件时返回纯文本字符串（兼容旧模型/旧消息）；有附件时返回
+  /// `[{type: text}, {type: image_url}, ...]` 数组。
+  dynamic _buildMultimodalContent(
+      String text, List<MessageAttachment> attachments) {
+    if (attachments.isEmpty) return text;
+    final parts = <Map<String, dynamic>>[];
+    final trimmed = text.trim();
+    if (trimmed.isNotEmpty) {
+      parts.add({'type': 'text', 'text': trimmed});
+    }
+    for (final att in attachments) {
+      if (att.isImage) {
+        final data = att.dataBase64;
+        if (data != null && data.isNotEmpty) {
+          parts.add({
+            'type': 'image_url',
+            'image_url': {'url': 'data:${att.mimeType ?? 'image/jpeg'};base64,$data'},
+          });
+        }
+      } else {
+        final data = att.dataBase64;
+        if (data != null && data.isNotEmpty) {
+          // OpenAI 兼容文件引用（部分网关支持 file_url）。
+          parts.add({
+            'type': 'file',
+            'file': {
+              'file_name': att.name,
+              'file_data': 'data:${att.mimeType ?? 'application/octet-stream'};base64,$data',
+            },
+          });
+        }
+      }
+    }
+    return parts;
   }
 
   /// 失败/停止终态落库（保留已生成内容，错误附带中文提示）。

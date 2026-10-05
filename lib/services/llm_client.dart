@@ -87,7 +87,7 @@ class LlmClient {
     required String baseUrl,
     required String apiKey,
     required String model,
-    required List<Map<String, String>> messages,
+    required List<Map<String, dynamic>> messages,
     required void Function(String delta) onDelta,
     /// 思维链增量回调（可选）：reasoning_content 每到达一段即回调，
     /// 供界面实时累积到思维链折叠卡片（与正文分离展示）。
@@ -257,7 +257,7 @@ class LlmClient {
     required String baseUrl,
     required String apiKey,
     required String model,
-    required List<Map<String, String>> messages,
+    required List<Map<String, dynamic>> messages,
     double? temperature,
     int? maxTokens,
     double? topP,
@@ -342,7 +342,10 @@ class LlmClient {
         final code = e.response?.statusCode;
         switch (code) {
           case 400:
-            return const LlmException(LlmErrorType.parse, '请求参数错误（400），请检查模型与参数设置');
+            return LlmException(
+              LlmErrorType.parse,
+              _friendlyBadRequest(e.response?.data),
+            );
           case 401:
           case 403:
             return LlmException(LlmErrorType.auth, 'API Key 无效或无权限（$code），请在设置中检查 API 配置');
@@ -357,6 +360,44 @@ class LlmClient {
       case DioExceptionType.transformTimeout:
         return const LlmException(LlmErrorType.network, '网络请求失败，请检查网络后重试');
     }
+  }
+
+  /// 400 错误的友好中文提示（PRD 2.4 / R9）：
+  /// 优先识别「不支持图片 / 多模态 / 文件」类错误，给出可操作的中文提示；
+  /// 其他 400 保持通用提示。
+  String _friendlyBadRequest(Object? data) {
+    var raw = '';
+    if (data is String) {
+      raw = data;
+    } else if (data is Map<String, dynamic>) {
+      final err = data['error'];
+      if (err is String) {
+        raw = err;
+      } else if (err is Map<String, dynamic>) {
+        raw = err['message']?.toString() ?? '';
+      }
+      if (raw.isEmpty) raw = data['message']?.toString() ?? '';
+    }
+    final lower = raw.toLowerCase();
+    final mentionsImage = lower.contains('image') ||
+        lower.contains('picture') ||
+        lower.contains('figure') ||
+        lower.contains('multimodal') ||
+        lower.contains('vision') ||
+        lower.contains('视觉') ||
+        lower.contains('图片') ||
+        lower.contains('图像');
+    final mentionsFile = lower.contains('file') ||
+        lower.contains('attachment') ||
+        lower.contains('文件') ||
+        lower.contains('附件');
+    if (mentionsImage) {
+      return '当前模型不支持图片输入，请更换支持多模态的模型后重试，或移除图片后直接发送文字';
+    }
+    if (mentionsFile) {
+      return '当前模型不支持文件输入，请更换支持文件/多模态的模型后重试，或移除文件后直接发送文字';
+    }
+    return '请求参数错误（400），请检查模型与参数设置';
   }
 
   /// 拼接 OpenAI 兼容接口 URL：规范化 baseUrl 尾部斜杠，避免产生

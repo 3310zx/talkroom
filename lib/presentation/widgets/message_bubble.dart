@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
@@ -7,6 +9,10 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../../domain/models/message.dart';
+import 'image_preview_page.dart';
 
 /// 消息气泡（微信风格：左侧 AI、右侧用户）。
 ///
@@ -34,6 +40,7 @@ class MessageBubble extends StatelessWidget {
     this.onEdit,
     this.onDelete,
     this.onQuote,
+    this.attachments = const [],
   });
 
   final bool isUser;
@@ -41,6 +48,9 @@ class MessageBubble extends StatelessWidget {
   final String? status;
   final String? errorMessage;
   final VoidCallback? onRetry;
+
+  /// R9：消息附件（图片/文件），仅用户消息携带。
+  final List<MessageAttachment> attachments;
 
   /// 思维链文本（与正文分离展示，默认折叠）
   final String? reasoningContent;
@@ -97,6 +107,16 @@ class MessageBubble extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
+              // R9：用户消息附件（图片缩略图 / 文件卡片）。
+              if (attachments.isNotEmpty) ...[
+                for (final att in attachments)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: _AttachmentView(attachment: att),
+                  ),
+                if (content.trim().isNotEmpty)
+                  const SizedBox(height: 2),
+              ],
               // 思维链折叠卡片：灰色底、斜体小字、分隔线，与正文明显区分。
               if (hasReasoning && !isUser) ...[
                 _ReasoningCard(
@@ -131,6 +151,9 @@ class MessageBubble extends StatelessWidget {
                     'pre': _CodeBlockBuilder(),
                     'math_block': _MathBuilder(inline: false),
                     'math_inline': _MathBuilder(inline: true),
+                    'table': _TableBuilder(),
+                    'img': _MarkdownImageBuilder(),
+                    'a': _LinkBuilder(),
                   },
                   styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
                     p: theme.textTheme.bodyLarge,
@@ -375,6 +398,363 @@ class _ReasoningCardState extends State<_ReasoningCard> {
         ],
       ),
     );
+  }
+}
+
+/// R9：用户消息附件视图。
+///
+/// - 图片（type == 'image'）：解码 `dataBase64` 显示圆角缩略图，
+///   点击进入 [ImagePreviewPage] 全屏预览（R5）；
+/// - 文件（type == 'file'）：文件卡片，展示类型图标 / 文件名 / 大小 /
+///   文本预览（前 120 字符）。
+class _AttachmentView extends StatelessWidget {
+  const _AttachmentView({required this.attachment});
+
+  final MessageAttachment attachment;
+
+  @override
+  Widget build(BuildContext context) {
+    final att = attachment;
+    if (att.isImage) {
+      final data = att.dataBase64;
+      if (data == null || data.isEmpty) {
+        return _FileCard(attachment: att);
+      }
+      return GestureDetector(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ImagePreviewPage(
+                base64Data: data,
+                title: att.name,
+              ),
+            ),
+          );
+        },
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 260, maxHeight: 240),
+            child: Image.memory(
+              base64Decode(data),
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => const _BrokenImagePlaceholder(),
+            ),
+          ),
+        ),
+      );
+    }
+    return _FileCard(attachment: att);
+  }
+}
+
+/// 文件卡片：类型图标（按 MIME 粗略分类）+ 文件名 + 大小 + 文本预览。
+class _FileCard extends StatelessWidget {
+  const _FileCard({required this.attachment});
+
+  final MessageAttachment attachment;
+
+  IconData get _icon {
+    final mime = attachment.mimeType ?? '';
+    if (mime.startsWith('image/')) return Icons.image_outlined;
+    if (mime.startsWith('video/')) return Icons.movie_outlined;
+    if (mime.startsWith('audio/')) return Icons.audio_file_outlined;
+    if (mime.contains('pdf')) return Icons.picture_as_pdf_outlined;
+    if (mime.contains('zip') ||
+        mime.contains('compressed') ||
+        mime.contains('tar')) {
+      return Icons.folder_zip_outlined;
+    }
+    if (mime.contains('word') || mime.contains('document')) {
+      return Icons.description_outlined;
+    }
+    if (mime.contains('excel') || mime.contains('sheet')) {
+      return Icons.table_chart_outlined;
+    }
+    return Icons.insert_drive_file_outlined;
+  }
+
+  String get _sizeLabel {
+    final size = attachment.sizeBytes;
+    if (size == null || size <= 0) return '';
+    if (size < 1024) return '$size B';
+    if (size < 1024 * 1024) return '${(size / 1024).toStringAsFixed(1)} KB';
+    return '${(size / 1024 / 1024).toStringAsFixed(1)} MB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: 240,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          Icon(_icon, size: 32, color: theme.colorScheme.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  attachment.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                if (_sizeLabel.isNotEmpty)
+                  Text(
+                    _sizeLabel,
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                if (attachment.textPreview != null &&
+                    attachment.textPreview!.trim().isNotEmpty)
+                  Text(
+                    attachment.textPreview!.trim(),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 图片加载失败占位。
+class _BrokenImagePlaceholder extends StatelessWidget {
+  const _BrokenImagePlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 120,
+      height: 120,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Icon(
+        Icons.broken_image_outlined,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    );
+  }
+}
+
+/// R4：Markdown 表格渲染（长表格横向滚动 / 自适应宽度）。
+///
+/// 每列宽度取 `MaxColumnWidth(IntrinsicColumnWidth(), FlexColumnWidth())`：
+/// 内容较窄时各列弹性分配铺满气泡宽度（自适应），内容超宽时按内容固有
+/// 宽度撑开，整体由外层横向 `SingleChildScrollView` 滚动查看，
+/// 避免手机端长表格被挤压变形。
+class _TableBuilder extends MarkdownElementBuilder {
+  @override
+  bool isBlockElement() => true;
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    // 收集表格行（thead/tbody 或平铺 tr）。
+    final rows = <List<md.Element>>[];
+    void collectRow(md.Element row) {
+      if (row.tag != 'tr') return;
+      final cells = <md.Element>[];
+      for (final cell in row.children ?? const <md.Node>[]) {
+        if (cell is md.Element && (cell.tag == 'th' || cell.tag == 'td')) {
+          cells.add(cell);
+        }
+      }
+      if (cells.isNotEmpty) rows.add(cells);
+    }
+
+    for (final child in element.children ?? const <md.Node>[]) {
+      if (child is md.Element &&
+          (child.tag == 'thead' || child.tag == 'tbody')) {
+        for (final row in child.children ?? const <md.Node>[]) {
+          if (row is md.Element) collectRow(row);
+        }
+      } else if (child is md.Element) {
+        collectRow(child);
+      }
+    }
+    if (rows.isEmpty) return null;
+
+    final colCount =
+        rows.fold<int>(0, (max, r) => r.length > max ? r.length : max);
+    final theme = Theme.of(context);
+    final borderColor = theme.colorScheme.outlineVariant;
+    final headerBg = theme.colorScheme.surfaceContainerHighest;
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Table(
+        defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+        columnWidths: {
+          for (var i = 0; i < colCount; i++)
+            i: const MaxColumnWidth(
+              IntrinsicColumnWidth(),
+              FlexColumnWidth(),
+            ),
+        },
+        border: TableBorder.all(color: borderColor, width: 0.6),
+        children: [
+          for (var r = 0; r < rows.length; r++)
+            TableRow(
+              decoration: rows[r].first.tag == 'th'
+                  ? BoxDecoration(color: headerBg)
+                  : null,
+              children: [
+                for (var c = 0; c < colCount; c++)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 6),
+                    child: c < rows[r].length
+                        ? Text(
+                            rows[r][c].textContent.trim(),
+                            style: rows[r][c].tag == 'th'
+                                ? (preferredStyle ??
+                                        theme.textTheme.bodyMedium)
+                                    ?.copyWith(fontWeight: FontWeight.bold)
+                                : preferredStyle ?? theme.textTheme.bodyMedium,
+                          )
+                        : const SizedBox(),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// R5：Markdown 图片渲染（点击全屏预览，可关闭）。
+class _MarkdownImageBuilder extends MarkdownElementBuilder {
+  @override
+  bool isBlockElement() => false;
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final src = element.attributes['src'] ?? '';
+    final alt = element.attributes['alt'] ?? '';
+    if (src.isEmpty) return null;
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ImagePreviewPage(
+              url: src,
+              title: alt.isEmpty ? null : alt,
+            ),
+          ),
+        );
+      },
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 280, maxHeight: 320),
+        child: Image.network(
+          src,
+          fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) => const _BrokenImagePlaceholder(),
+          loadingBuilder: (context, child, progress) {
+            if (progress == null) return child;
+            return SizedBox(
+              width: 120,
+              height: 120,
+              child: Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// R5：Markdown 链接渲染（点击用系统浏览器打开；长按复制链接）。
+class _LinkBuilder extends MarkdownElementBuilder {
+  @override
+  bool isBlockElement() => false;
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final href = element.attributes['href'] ?? '';
+    final text = element.textContent;
+    if (href.isEmpty) {
+      return Text(text, style: preferredStyle ?? parentStyle);
+    }
+    final theme = Theme.of(context);
+    final linkStyle = (preferredStyle ?? parentStyle ?? theme.textTheme.bodyMedium)
+        ?.copyWith(
+      color: theme.colorScheme.primary,
+      decoration: TextDecoration.underline,
+      decorationColor: theme.colorScheme.primary,
+    );
+    return GestureDetector(
+      onTap: () => _openLink(context, href),
+      onLongPress: () => _copyLink(context, href),
+      child: Text(text, style: linkStyle),
+    );
+  }
+
+  Future<void> _openLink(BuildContext context, String href) async {
+    final uri = Uri.tryParse(href);
+    if (uri == null) return;
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && context.mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('无法打开链接')));
+      }
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('无法打开链接')));
+      }
+    }
+  }
+
+  Future<void> _copyLink(BuildContext context, String href) async {
+    await Clipboard.setData(ClipboardData(text: href));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(content: Text('链接已复制'), duration: Duration(seconds: 1)),
+      );
   }
 }
 
