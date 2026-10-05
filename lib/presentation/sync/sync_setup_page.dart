@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../application/providers/settings_provider.dart';
 import '../../application/providers/sync_provider.dart';
 import '../../core/constants.dart';
+import 'scan_pair_page.dart';
 
 /// 客户端连接配置页（PRD 第 7 章 7.3）。
 ///
@@ -39,6 +40,13 @@ class _SyncSetupPageState extends ConsumerState<SyncSetupPage> {
     _codeCtrl.dispose();
     _nameCtrl.dispose();
     super.dispose();
+  }
+
+  /// R15：扫码配对入口，进入相机扫码页。
+  void _scanPair() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ScanPairPage()),
+    );
   }
 
   Future<void> _pair() async {
@@ -143,6 +151,13 @@ class _SyncSetupPageState extends ConsumerState<SyncSetupPage> {
             ),
           ),
           const SizedBox(height: 20),
+          // R15：扫码配对入口。
+          FilledButton.tonalIcon(
+            onPressed: _scanPair,
+            icon: const Icon(Icons.qr_code_scanner),
+            label: const Text('扫码配对（扫描电脑端二维码）'),
+          ),
+          const SizedBox(height: 8),
           FilledButton.icon(
             onPressed: _pairing ? null : _pair,
             icon: _pairing
@@ -152,7 +167,7 @@ class _SyncSetupPageState extends ConsumerState<SyncSetupPage> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.link),
-            label: Text(_pairing ? '配对中...' : '配对并连接'),
+            label: Text(_pairing ? '配对中...' : '手动输入并配对'),
           ),
           if (sync.enabled) ...[
             const SizedBox(height: 8),
@@ -165,10 +180,11 @@ class _SyncSetupPageState extends ConsumerState<SyncSetupPage> {
           const SizedBox(height: 24),
           Text(
             '使用说明：\n'
-            '1. 在电脑端设置 → 本地服务器中启动服务器并查看 IP 与配对码；\n'
-            '2. 手机与本机处于同一局域网；\n'
-            '3. 输入电脑 IP、端口与 6 位配对码完成配对；\n'
-            '4. 配对成功后消息将自动双向同步，电脑为权威源。',
+            '1. 在电脑端设置 → 本地服务器中启动服务器，展示配对二维码与配对码；\n'
+            '2. 手机与本机处于同一局域网，推荐点击「扫码配对」直接扫描二维码；\n'
+            '3. 也可手动输入电脑 IP、端口与 6 位配对码完成配对；\n'
+            '4. 配对成功后消息自动双向同步，电脑为权威源；\n'
+            '5. 双端同时修改同一条消息时按「电脑优先」规则合并，并在状态卡提示冲突。',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/providers/api_configs_provider.dart';
+import '../../application/providers/database_provider.dart';
 import '../../application/providers/messages_provider.dart';
 import '../../application/providers/settings_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
@@ -10,6 +11,7 @@ import '../../core/theme.dart';
 import '../../domain/models/api_config.dart';
 import '../../domain/models/conversation.dart';
 import '../settings/settings_page.dart';
+import 'conversation_param_page.dart';
 
 /// 宽屏三栏右侧辅助面板（平板端布局）。
 ///
@@ -128,6 +130,24 @@ class ChatDetailPanel extends ConsumerWidget {
             ),
             ListTile(
               dense: true,
+              leading: const Icon(Icons.tune, size: 20),
+              title: const Text('frequency_penalty', style: TextStyle(fontSize: 13)),
+              trailing: Text(
+                '${selected.frequencyPenalty ?? double.tryParse(settings[AppConstants.settingFrequencyPenalty] ?? '') ?? AppConstants.defaultFrequencyPenalty}',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.tune, size: 20),
+              title: const Text('presence_penalty', style: TextStyle(fontSize: 13)),
+              trailing: Text(
+                '${selected.presencePenalty ?? double.tryParse(settings[AppConstants.settingPresencePenalty] ?? '') ?? AppConstants.defaultPresencePenalty}',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+            ListTile(
+              dense: true,
               leading: const Icon(Icons.notes_outlined, size: 20),
               title: const Text('System Prompt', style: TextStyle(fontSize: 13)),
               subtitle: Text(
@@ -138,24 +158,75 @@ class ChatDetailPanel extends ConsumerWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            if (selected.temperature != null ||
+                selected.maxTokens != null ||
+                selected.topP != null ||
+                selected.frequencyPenalty != null ||
+                selected.presencePenalty != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  '该会话已覆盖部分全局默认参数',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+              ),
           ],
           const Divider(),
           const SizedBox(height: 8),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: theme.colorScheme.primary,
-                side: BorderSide(color: theme.colorScheme.primary),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: theme.colorScheme.primary,
+                    side: BorderSide(color: theme.colorScheme.primary),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                  icon: const Icon(Icons.tune),
+                  label: const Text('编辑会话参数'),
+                  onPressed: () async {
+                    if (selected == null) return;
+                    final changed = await Navigator.of(context).push<bool>(
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            ConversationParamPage(conversation: selected),
+                      ),
+                    );
+                    if (changed == true) {
+                      final updated = await ref
+                          .read(appDatabaseProvider)
+                          .conversationRepository
+                          .getById(selected.id!);
+                      if (updated != null) {
+                        ref.read(selectedConversationProvider.notifier).state =
+                            updated;
+                      }
+                    }
+                  },
                 ),
-              ),
-              icon: const Icon(Icons.settings_outlined),
-              label: const Text('设置'),
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SettingsPage()),
-              ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: theme.colorScheme.primary,
+                    side: BorderSide(color: theme.colorScheme.primary),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                  icon: const Icon(Icons.settings_outlined),
+                  label: const Text('设置'),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SettingsPage()),
+                  ),
+                ),
+              ],
             ),
           ),
         ],

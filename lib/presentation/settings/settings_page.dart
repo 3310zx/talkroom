@@ -9,6 +9,7 @@ import '../../application/providers/local_server_provider.dart';
 import '../../application/providers/settings_provider.dart';
 import '../../application/providers/sync_provider.dart';
 import '../../core/constants.dart';
+import '../../core/param_presets.dart';
 import '../../core/theme.dart';
 import '../../services/apk_downloader.dart';
 import '../../services/update_service.dart';
@@ -173,7 +174,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             subtitle: Text(
               'temperature=${settings[AppConstants.settingTemperature] ?? '0.7'} '
               'max_tokens=${settings[AppConstants.settingMaxTokens] ?? '2048'} '
-              'top_p=${settings[AppConstants.settingTopP] ?? '1.0'}',
+              'top_p=${settings[AppConstants.settingTopP] ?? '1.0'} '
+              'freq=${settings[AppConstants.settingFrequencyPenalty] ?? '0.0'} '
+              'pres=${settings[AppConstants.settingPresencePenalty] ?? '0.0'}',
             ),
             onTap: _editDefaultParams,
           ),
@@ -412,7 +415,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// 编辑全局默认参数（PRD 4.5.1：temperature/max_tokens/top_p/system_prompt）。
+  /// 编辑全局默认参数（PRD 4.5.1：temperature/max_tokens/top_p/system_prompt；
+  /// R14：增加 frequency_penalty / presence_penalty 与参数预设）。
   Future<void> _editDefaultParams() async {
     final settings = ref.read(settingsProvider);
     final temperatureCtrl = TextEditingController(
@@ -423,8 +427,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             '${AppConstants.defaultMaxTokens}');
     final topPCtrl = TextEditingController(
         text: settings[AppConstants.settingTopP] ?? '${AppConstants.defaultTopP}');
+    final frequencyCtrl = TextEditingController(
+        text: settings[AppConstants.settingFrequencyPenalty] ??
+            '${AppConstants.defaultFrequencyPenalty}');
+    final presenceCtrl = TextEditingController(
+        text: settings[AppConstants.settingPresencePenalty] ??
+            '${AppConstants.defaultPresencePenalty}');
     final systemPromptCtrl = TextEditingController(
         text: settings[AppConstants.settingSystemPrompt] ?? '');
+    String selectedPreset = '';
 
     final saved = await showDialog<bool>(
       context: context,
@@ -433,7 +444,55 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // R14：参数预设一键切换（创意/严谨/代码）。
+              StatefulBuilder(
+                builder: (context, setDialogState) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('参数预设'),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      children: [
+                        for (final preset in kParamPresets)
+                          ChoiceChip(
+                            label: Text(preset.name),
+                            selected: selectedPreset == preset.name,
+                            onSelected: (_) {
+                              setDialogState(() {
+                                selectedPreset = preset.name;
+                                temperatureCtrl.text =
+                                    preset.temperature.toString();
+                                maxTokensCtrl.text = preset.maxTokens.toString();
+                                topPCtrl.text = preset.topP.toString();
+                                frequencyCtrl.text =
+                                    preset.frequencyPenalty.toString();
+                                presenceCtrl.text =
+                                    preset.presencePenalty.toString();
+                              });
+                            },
+                          ),
+                      ],
+                    ),
+                    if (selectedPreset.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4, bottom: 8),
+                        child: Text(
+                          kParamPresets
+                              .firstWhere((p) => p.name == selectedPreset)
+                              .description,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 4),
               TextField(
                 controller: temperatureCtrl,
                 keyboardType:
@@ -457,6 +516,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(
                   labelText: 'top_p（0.0 ~ 1.0，默认 1.0）',
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: frequencyCtrl,
+                keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true, signed: true),
+                decoration: const InputDecoration(
+                  labelText: 'frequency_penalty（-2.0 ~ 2.0，默认 0.0）',
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: presenceCtrl,
+                keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true, signed: true),
+                decoration: const InputDecoration(
+                  labelText: 'presence_penalty（-2.0 ~ 2.0，默认 0.0）',
                 ),
               ),
               const SizedBox(height: 8),
@@ -488,6 +565,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final temp = double.tryParse(temperatureCtrl.text.trim());
     final maxTok = int.tryParse(maxTokensCtrl.text.trim());
     final topP = double.tryParse(topPCtrl.text.trim());
+    final freq = double.tryParse(frequencyCtrl.text.trim());
+    final presence = double.tryParse(presenceCtrl.text.trim());
     if (temp == null || temp < 0 || temp > 2) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('temperature 需为 0.0 ~ 2.0 的数字')),
@@ -506,12 +585,26 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       );
       return;
     }
+    if (freq == null || freq < -2 || freq > 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('frequency_penalty 需为 -2.0 ~ 2.0 的数字')),
+      );
+      return;
+    }
+    if (presence == null || presence < -2 || presence > 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('presence_penalty 需为 -2.0 ~ 2.0 的数字')),
+      );
+      return;
+    }
     final notifier = ref.read(settingsProvider.notifier);
     await notifier.set(
         AppConstants.settingTemperature, temperatureCtrl.text.trim());
     await notifier.set(
         AppConstants.settingMaxTokens, maxTokensCtrl.text.trim());
     await notifier.set(AppConstants.settingTopP, topPCtrl.text.trim());
+    await notifier.set(AppConstants.settingFrequencyPenalty, frequencyCtrl.text.trim());
+    await notifier.set(AppConstants.settingPresencePenalty, presenceCtrl.text.trim());
     await notifier.set(
         AppConstants.settingSystemPrompt, systemPromptCtrl.text.trim());
   }

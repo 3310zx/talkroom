@@ -7,6 +7,7 @@ import '../../application/providers/prompt_templates_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
 import '../../core/theme.dart';
 import '../../domain/models/conversation.dart';
+import '../search/global_search_page.dart';
 import 'archive_conversations_page.dart';
 
 /// 会话列表页（三栏左栏 / 移动端聊天 Tab 顶部入口）。
@@ -54,6 +55,14 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
       appBar: AppBar(
         title: const Text('LLM Chat'),
         actions: [
+          // R12：跨会话全文搜索入口。
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: '搜索聊天记录',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const GlobalSearchPage()),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: '新建会话',

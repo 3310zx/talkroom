@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../../domain/models/message.dart';
+import '../../domain/models/message_search_hit.dart';
 import '../../domain/repositories/message_repository.dart';
 import '../database/app_database.dart';
 
@@ -19,6 +20,56 @@ class MessageRepositoryImpl implements MessageRepository {
       orderBy: 'created_at ASC, id ASC',
     );
     return rows.map(ChatMessage.fromMap).toList();
+  }
+
+  @override
+  Future<List<MessageSearchHit>> searchMessages(
+    String keyword, {
+    int limit = 100,
+  }) async {
+    final kw = keyword.trim();
+    if (kw.isEmpty) return const [];
+    final pattern = '%$kw%';
+    final rows = await _appDatabase.db.rawQuery(
+      '''
+      SELECT m.id AS m_id, m.conversation_id, m.role, m.content, m.content_type,
+             m.status, m.model_id, m.prompt_tokens, m.completion_tokens,
+             m.cached_tokens, m.error_message, m.device_id, m.server_id,
+             m.created_at, m.updated_at, m.attachments,
+             c.title AS conv_title
+      FROM messages m
+      JOIN conversations c ON c.id = m.conversation_id
+      WHERE m.content LIKE ? AND m.content IS NOT NULL AND m.content != ''
+      ORDER BY m.created_at DESC, m.id DESC
+      LIMIT ?
+      ''',
+      [pattern, limit],
+    );
+    return rows.map((row) {
+      final msg = ChatMessage.fromMap({
+        'id': row['m_id'],
+        'conversation_id': row['conversation_id'],
+        'role': row['role'],
+        'content': row['content'],
+        'content_type': row['content_type'],
+        'status': row['status'],
+        'model_id': row['model_id'],
+        'prompt_tokens': row['prompt_tokens'],
+        'completion_tokens': row['completion_tokens'],
+        'cached_tokens': row['cached_tokens'],
+        'error_message': row['error_message'],
+        'device_id': row['device_id'],
+        'server_id': row['server_id'],
+        'created_at': row['created_at'],
+        'updated_at': row['updated_at'],
+        'attachments': row['attachments'],
+      });
+      return MessageSearchHit(
+        message: msg,
+        conversationId: row['conversation_id'] as int? ?? 0,
+        conversationTitle: row['conv_title'] as String? ?? '新会话',
+      );
+    }).toList();
   }
 
   @override

@@ -145,6 +145,19 @@ class AppDatabase {
     await db.execute('CREATE INDEX idx_active_tasks_next ON active_tasks(enabled, next_run_at)');
 
     await db.execute('''
+      CREATE TABLE IF NOT EXISTS execution_logs (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id    INTEGER NOT NULL,
+        run_at     INTEGER NOT NULL,
+        status     TEXT NOT NULL,
+        summary    TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_execution_logs_task ON execution_logs(task_id, run_at DESC)');
+
+    await db.execute('''
       CREATE TABLE settings (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -224,6 +237,39 @@ class AppDatabase {
     if (oldVersion < 6) {
       await _migrateMessagesV6(db);
     }
+    // version 6 -> 7：会话级惩罚参数（R14）+ 主动任务执行日志（R16）
+    if (oldVersion < 7) {
+      await _migrateV7(db);
+    }
+  }
+
+  /// version 6 -> 7 迁移（R14 / R16）：
+  /// - `conversations` 追加 `frequency_penalty` / `presence_penalty` 列
+  ///   （会话级覆盖全局默认，NULL 表示跟随全局设置）；
+  /// - 新建 `execution_logs` 表（主动消息任务执行日志，PRD 5.5）。
+  Future<void> _migrateV7(Database db) async {
+    final cols = await db.rawQuery('PRAGMA table_info(conversations)');
+    final existing = cols.map((c) => c['name'] as String).toSet();
+    if (!existing.contains('frequency_penalty')) {
+      await db.execute(
+          'ALTER TABLE conversations ADD COLUMN frequency_penalty REAL');
+    }
+    if (!existing.contains('presence_penalty')) {
+      await db.execute(
+          'ALTER TABLE conversations ADD COLUMN presence_penalty REAL');
+    }
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS execution_logs (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id    INTEGER NOT NULL,
+        run_at     INTEGER NOT NULL,
+        status     TEXT NOT NULL,
+        summary    TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_execution_logs_task ON execution_logs(task_id, run_at DESC)');
   }
 
   /// version 5 -> 6 迁移：`messages` 追加 `attachments` TEXT 列

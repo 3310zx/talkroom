@@ -1,4 +1,5 @@
 import '../models/active_task.dart';
+import '../models/active_task_log.dart';
 
 /// 主动消息任务仓储接口（PRD 5.1 定时任务配置持久化）。
 abstract class ActiveTaskRepository {
@@ -16,4 +17,10 @@ abstract class ActiveTaskRepository {
   Future<int> insert(ActiveTask task);
   Future<void> update(ActiveTask task);
   Future<void> delete(int id);
+
+  /// 写入任务执行日志（R16，v1.0.15）。
+  Future<void> insertLog(ActiveTaskLog log);
+
+  /// 查询某任务最近 [limit] 条执行日志（按时间倒序）。
+  Future<List<ActiveTaskLog>> listLogsByTask(int taskId, {int limit = 50});
 }

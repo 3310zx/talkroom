@@ -96,6 +96,8 @@ class LlmClient {
     double? temperature,
     int? maxTokens,
     double? topP,
+    double? frequencyPenalty,
+    double? presencePenalty,
   }) async {
     final contentBuffer = StringBuffer();
     final reasoningBuffer = StringBuffer();
@@ -119,6 +121,8 @@ class LlmClient {
           if (temperature != null) 'temperature': temperature,
           if (maxTokens != null) 'max_tokens': maxTokens,
           if (topP != null) 'top_p': topP,
+          if (frequencyPenalty != null) 'frequency_penalty': frequencyPenalty,
+          if (presencePenalty != null) 'presence_penalty': presencePenalty,
         },
         options: Options(
           responseType: ResponseType.stream,
@@ -261,6 +265,8 @@ class LlmClient {
     double? temperature,
     int? maxTokens,
     double? topP,
+    double? frequencyPenalty,
+    double? presencePenalty,
   }) async {
     final Response<dynamic> response;
     try {
@@ -273,6 +279,8 @@ class LlmClient {
           if (temperature != null) 'temperature': temperature,
           if (maxTokens != null) 'max_tokens': maxTokens,
           if (topP != null) 'top_p': topP,
+          if (frequencyPenalty != null) 'frequency_penalty': frequencyPenalty,
+          if (presencePenalty != null) 'presence_penalty': presencePenalty,
         },
         options: Options(
           headers: {'Authorization': 'Bearer $apiKey'},

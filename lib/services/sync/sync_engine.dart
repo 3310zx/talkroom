@@ -29,13 +29,15 @@ class SyncEngine {
     void Function(ChatMessage message)? onRemoteMessage,
     void Function(bool connected)? onConnectionChanged,
     void Function(DateTime time)? onSynced,
+    void Function(int count, String summary)? onConflict,
   })  : _settings = settings,
         _messages = messages,
         _conversations = conversations,
         _cursors = cursors,
         _onRemoteMessage = onRemoteMessage,
         _onConnectionChanged = onConnectionChanged,
-        _onSynced = onSynced;
+        _onSynced = onSynced,
+        _onConflict = onConflict;
 
   final SettingsRepository _settings;
   final MessageRepository _messages;
@@ -48,6 +50,7 @@ class SyncEngine {
   final void Function(ChatMessage message)? _onRemoteMessage;
   final void Function(bool connected)? _onConnectionChanged;
   final void Function(DateTime time)? _onSynced;
+  final void Function(int count, String summary)? _onConflict;
 
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 5),
@@ -263,9 +266,12 @@ class SyncEngine {
   /// 合并服务器增量消息到本地缓存（幂等：按 server_id 去重）。
   Future<void> _mergeMessages(List<ChatMessage> remote) async {
     final maxByConv = <int, int>{};
+    var conflictCount = 0;
     for (final m in remote) {
       final existing = m.serverId == null ? null : await _messages.findByServerId(m.serverId!);
       if (existing != null) {
+        final contentChanged = existing.content != m.content ||
+            existing.contentType != m.contentType;
         // 服务器为权威源：保留本地自增 id，其余字段以服务器为准
         final merged = existing.copyWith(
           role: m.role,
@@ -281,6 +287,7 @@ class SyncEngine {
           updatedAt: m.updatedAt,
         );
         await _messages.update(merged);
+        if (contentChanged) conflictCount++;
       } else {
         await _messages.insert(m);
       }
@@ -298,6 +305,10 @@ class SyncEngine {
           updatedAt: now,
         ));
       }
+    }
+    if (conflictCount > 0) {
+      _onConflict?.call(
+          conflictCount, '检测到 $conflictCount 条消息内容冲突，已以服务器版本为准');
     }
     for (final m in remote) {
       _onRemoteMessage?.call(m);

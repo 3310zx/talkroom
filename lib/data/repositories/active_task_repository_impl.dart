@@ -1,4 +1,5 @@
 import '../../domain/models/active_task.dart';
+import '../../domain/models/active_task_log.dart';
 import '../../domain/repositories/active_task_repository.dart';
 import '../database/app_database.dart';
 
@@ -69,5 +70,22 @@ class ActiveTaskRepositoryImpl implements ActiveTaskRepository {
   @override
   Future<void> delete(int id) async {
     await _appDatabase.db.delete('active_tasks', where: 'id = ?', whereArgs: [id]);
+  }
+
+  @override
+  Future<void> insertLog(ActiveTaskLog log) async {
+    await _appDatabase.db.insert('execution_logs', log.toMap()..remove('id'));
+  }
+
+  @override
+  Future<List<ActiveTaskLog>> listLogsByTask(int taskId, {int limit = 50}) async {
+    final rows = await _appDatabase.db.query(
+      'execution_logs',
+      where: 'task_id = ?',
+      whereArgs: [taskId],
+      orderBy: 'run_at DESC, id DESC',
+      limit: limit,
+    );
+    return rows.map(ActiveTaskLog.fromMap).toList();
   }
 }

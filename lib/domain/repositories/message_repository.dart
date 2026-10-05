@@ -1,9 +1,18 @@
 import '../models/message.dart';
+import '../models/message_search_hit.dart';
 
 /// 消息仓储接口。
 abstract class MessageRepository {
   /// 按创建时间升序返回某会话的全部消息
   Future<List<ChatMessage>> listByConversation(int conversationId);
+
+  /// 跨会话全文搜索（R12，v1.0.15）：按关键词模糊匹配消息内容，
+  /// 返回命中消息及其所属会话（按会话更新时间倒序、消息时间倒序），
+  /// 供全局搜索页展示与跳转定位。
+  Future<List<MessageSearchHit>> searchMessages(
+    String keyword, {
+    int limit = 100,
+  });
 
   Future<ChatMessage?> getById(int id);
   Future<int> insert(ChatMessage message);

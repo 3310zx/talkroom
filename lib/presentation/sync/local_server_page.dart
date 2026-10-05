@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../application/providers/database_provider.dart';
 import '../../application/providers/local_server_provider.dart';
 import '../../application/providers/settings_provider.dart';
+import '../../application/providers/sync_provider.dart';
 import '../../core/constants.dart';
 
 /// 本地服务器管理页（PRD 第 7 章，电脑端）。
@@ -75,8 +77,12 @@ class _LocalServerPageState extends ConsumerState<LocalServerPage> {
             _section('局域网地址'),
             _lanIpsTile(status),
             const Divider(),
-            _section('扫码连接（占位）'),
-            _qrPlaceholder(status),
+            _section('扫码连接'),
+            _qrCard(status),
+            const Divider(),
+            // R15：实时同步状态与冲突提示（服务端同样参与合并，可检测冲突）。
+            _section('同步状态'),
+            const _SyncStatusCard(),
             const Divider(),
             _section('已配对设备'),
             const _PairedDevicesList(),
@@ -203,25 +209,51 @@ class _LocalServerPageState extends ConsumerState<LocalServerPage> {
     );
   }
 
-  Widget _qrPlaceholder(dynamic status) {
+  /// R15：扫码连接卡片。展示真实配对二维码（talkroom://pair 约定格式，
+  /// 与手机端 ScanPairPage 解析逻辑一致），供手机「扫码配对」直接扫描。
+  Widget _qrCard(dynamic status) {
+    final ips = status?.lanIps as List<String>? ?? const <String>[];
+    final code = status?.pairCode;
+    final port = status?.port;
+    if (status == null || code == null || code.isEmpty || ips.isEmpty || port == null) {
+      return const Card(
+        child: ListTile(
+          leading: Icon(Icons.qr_code_2),
+          title: Text('扫码连接'),
+          subtitle: Text('启动服务器并生成配对码后，可展示配对二维码供手机扫码'),
+        ),
+      );
+    }
+    final payload = 'talkroom://pair?host=${ips.first}&port=$port&code=$code';
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           children: [
             Container(
-              width: 160,
-              height: 160,
+              width: 180,
+              height: 180,
               decoration: BoxDecoration(
                 border: Border.all(color: Theme.of(context).dividerColor),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Center(
-                child: Icon(Icons.qr_code_2, size: 96, color: Colors.black54),
+              padding: const EdgeInsets.all(8),
+              child: QrImageView(
+                data: payload,
+                version: QrVersions.auto,
+                size: 164,
+                eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square),
+                dataModuleStyle:
+                    const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square),
               ),
             ),
             const SizedBox(height: 12),
-            const Text('二维码展示为占位（P2 TODO）：扫码后自动填入 IP 与端口'),
+            const Text('手机端点击「扫码配对」扫描此二维码，即可自动填入 IP、端口与配对码'),
+            const SizedBox(height: 8),
+            Text(
+              'http://${ips.first}:$port',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ],
         ),
       ),
@@ -397,5 +429,64 @@ class _PairedDevicesList extends ConsumerWidget {
     final db = ref.read(appDatabaseProvider);
     await db.deviceRepository.removeByDeviceId(deviceId);
     ref.invalidate(localServerDevicesProvider);
+  }
+}
+
+/// R15：实时同步状态卡片（电脑端「本地服务器」页）。
+///
+/// 展示本机作为权威源的连接状态、最后同步时间与双端写冲突提示；
+/// 冲突提示与服务端合并逻辑联动（检测到覆盖即上报）。
+class _SyncStatusCard extends ConsumerWidget {
+  const _SyncStatusCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final sync = ref.watch(syncStatusProvider);
+    final color = sync.connected
+        ? Colors.green
+        : (sync.enabled ? Colors.orange : Colors.grey);
+    final lastSync = sync.lastSyncAtMs;
+    final lastSyncText = lastSync == null
+        ? '从未同步'
+        : '最后同步：${DateTime.fromMillisecondsSinceEpoch(lastSync).toLocal()}';
+    return Card(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: Icon(
+              sync.connected ? Icons.cloud_done : Icons.cloud_queue,
+              color: color,
+              size: 36,
+            ),
+            title: Text(sync.enabled
+                ? (sync.connected ? '已连接' : '已配对，等待连接')
+                : '未配对'),
+            subtitle: Text(
+              '${sync.host.isEmpty ? '--' : sync.host}:${sync.port == 0 ? '--' : sync.port}\n'
+              '$lastSyncText${sync.lastError == null ? '' : '\n${sync.lastError}'}',
+            ),
+          ),
+          if (sync.pendingConflicts > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.warning_amber_rounded,
+                      color: Colors.deepOrange, size: 18),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      sync.lastConflictText ?? '检测到双端写冲突，已按规则合并',
+                      style: const TextStyle(color: Colors.deepOrange, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }

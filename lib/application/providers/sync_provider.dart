@@ -29,6 +29,9 @@ final syncEngineProvider = Provider<SyncEngine>(
       onSynced: (time) {
         notifier.setLastSyncAt(time.millisecondsSinceEpoch);
       },
+      onConflict: (count, summary) {
+        notifier.setConflict(count, summary);
+      },
     );
   },
 );
@@ -42,6 +45,8 @@ class SyncState {
     this.connected = false,
     this.lastSyncAtMs,
     this.lastError,
+    this.pendingConflicts = 0,
+    this.lastConflictText,
   });
 
   final bool enabled;
@@ -51,6 +56,12 @@ class SyncState {
   final int? lastSyncAtMs;
   final String? lastError;
 
+  /// 最近一次同步中检测到的双端写冲突条数（R15，v1.0.15）。
+  final int pendingConflicts;
+
+  /// 冲突提示文本（R15，v1.0.15）：如「检测到 2 条双端修改冲突，已按电脑优先合并」。
+  final String? lastConflictText;
+
   SyncState copyWith({
     bool? enabled,
     String? host,
@@ -58,6 +69,8 @@ class SyncState {
     bool? connected,
     int? lastSyncAtMs,
     String? lastError,
+    int? pendingConflicts,
+    String? lastConflictText,
   }) {
     return SyncState(
       enabled: enabled ?? this.enabled,
@@ -66,6 +79,8 @@ class SyncState {
       connected: connected ?? this.connected,
       lastSyncAtMs: lastSyncAtMs ?? this.lastSyncAtMs,
       lastError: lastError ?? this.lastError,
+      pendingConflicts: pendingConflicts ?? this.pendingConflicts,
+      lastConflictText: lastConflictText ?? this.lastConflictText,
     );
   }
 }
@@ -92,5 +107,13 @@ class SyncStatusNotifier extends StateNotifier<SyncState> {
 
   void setError(String? error) {
     state = state.copyWith(lastError: error);
+  }
+
+  /// R15：记录双端写冲突提示（数量 + 摘要），供设置页/连接页醒目展示。
+  void setConflict(int count, String summary) {
+    state = state.copyWith(
+      pendingConflicts: count,
+      lastConflictText: summary,
+    );
   }
 }

@@ -5,6 +5,7 @@ import '../../application/providers/active_tasks_provider.dart';
 import '../../domain/models/active_task.dart';
 import '../../domain/models/active_task_schedule.dart';
 import 'active_task_edit_page.dart';
+import 'active_task_log_page.dart';
 
 /// 主动消息管理页（PRD 5.1 方案 A：定时任务管理）。
 ///
@@ -78,6 +79,11 @@ class _TaskListView extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
+                icon: const Icon(Icons.receipt_long_outlined),
+                tooltip: '执行日志',
+                onPressed: () => _openLogs(context, task),
+              ),
+              IconButton(
                 icon: const Icon(Icons.edit_outlined),
                 tooltip: '编辑',
                 onPressed: () => _openEdit(context, ref, existing: task),
@@ -92,6 +98,12 @@ class _TaskListView extends ConsumerWidget {
           onTap: () => _openEdit(context, ref, existing: task),
         );
       },
+    );
+  }
+
+  Future<void> _openLogs(BuildContext context, ActiveTask task) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => ActiveTaskLogPage(task: task)),
     );
   }
 

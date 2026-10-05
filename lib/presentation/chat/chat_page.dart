@@ -21,9 +21,12 @@ import '../../domain/models/api_config.dart';
 import '../../domain/models/conversation.dart';
 import '../../domain/models/message.dart';
 import '../../services/llm_client.dart';
+import '../../services/conversation_exporter.dart';
 import '../api_config/api_config_list_page.dart';
+import '../search/global_search_page.dart';
 import '../widgets/message_bubble.dart';
 import 'chat_session_drawer.dart';
+import 'conversation_param_page.dart';
 
 /// 聊天页（三栏中间栏 / 移动端聊天 Tab）。
 ///
@@ -42,6 +45,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final Map<int, GlobalKey> _messageKeys = {};
   CancelToken? _cancelToken;
   bool _isSending = false;
   int? _currentAssistantId;
@@ -82,6 +86,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final selected = ref.watch(selectedConversationProvider);
     final messages = ref.watch(messagesProvider);
     final apiConfigs = ref.watch(apiConfigsProvider);
+    // R12：监听到全局搜索跳转目标后滚动定位到对应消息。
+    ref.listen(pendingSearchMessageIdProvider, (prev, next) {
+      if (next != null) {
+        _scrollToMessage(messages, next);
+      }
+    });
     // 兜底：列表为空且 provider 从未成功加载时，主动补一次加载，
     // 避免「尚未添加 API 配置」误报（数据实际存在但 state 未就绪）。
     final apiNotifier = ref.read(apiConfigsProvider.notifier);
@@ -138,6 +148,59 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             ),
           ],
         ),
+        actions: [
+          // R12：跨会话全文搜索入口（窄屏聊天页同样可用）。
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: '搜索聊天记录',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const GlobalSearchPage()),
+            ),
+          ),
+          if (selected != null)
+            IconButton(
+              icon: const Icon(Icons.tune),
+              tooltip: '会话参数',
+              onPressed: () async {
+                final changed = await Navigator.of(context).push<bool>(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ConversationParamPage(conversation: selected),
+                  ),
+                );
+                if (changed == true && mounted) {
+                  final updated = await ref
+                      .read(appDatabaseProvider)
+                      .conversationRepository
+                      .getById(selected.id!);
+                  if (updated != null) {
+                    ref.read(selectedConversationProvider.notifier).state =
+                        updated;
+                  }
+                }
+              },
+            ),
+          // R11：导出当前会话（Markdown / 纯文本 / PDF）。
+          if (selected != null)
+            IconButton(
+              icon: const Icon(Icons.ios_share),
+              tooltip: '导出会话',
+              onPressed: () {
+                final exportMessages = messages.where((m) {
+                  return m.role == 'user' || m.role == 'assistant';
+                }).toList();
+                if (exportMessages.isEmpty) {
+                  _showSnack('当前会话暂无消息可导出');
+                  return;
+                }
+                ConversationExporter.exportConversation(
+                  context,
+                  selected,
+                  exportMessages,
+                );
+              },
+            ),
+        ],
       ),
       body: Column(
         children: [
@@ -152,7 +215,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                         itemCount: messages.length,
                         itemBuilder: (context, index) {
                           final message = messages[index];
-                          return MessageBubble(
+                          final messageKey = message.id == null
+                              ? null
+                              : _messageKeys.putIfAbsent(
+                                  message.id!, () => GlobalKey());
+                          final bubble = MessageBubble(
                             isUser: message.role == 'user',
                             content: message.content,
                             status: message.status,
@@ -178,6 +245,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             onDelete: () => _deleteMessage(message),
                             onQuote: () => _quoteMessage(message),
                           );
+                          return messageKey == null
+                              ? bubble
+                              : KeyedSubtree(key: messageKey, child: bubble);
                         },
                       ),
           ),
@@ -488,6 +558,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               settings, AppConstants.settingMaxTokens, AppConstants.defaultMaxTokens);
       final topP = conv.topP ??
           _doubleSetting(settings, AppConstants.settingTopP, AppConstants.defaultTopP);
+      final frequencyPenalty = conv.frequencyPenalty ??
+          _doubleSetting(
+              settings, AppConstants.settingFrequencyPenalty, AppConstants.defaultFrequencyPenalty);
+      final presencePenalty = conv.presencePenalty ??
+          _doubleSetting(
+              settings, AppConstants.settingPresencePenalty, AppConstants.defaultPresencePenalty);
       var systemPrompt = conv.systemPrompt ?? settings[AppConstants.settingSystemPrompt];
       if (conv.promptTemplateId != null) {
         final template = await ref
@@ -548,6 +624,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         temperature: temperature,
         maxTokens: maxTokens,
         topP: topP,
+        frequencyPenalty: frequencyPenalty,
+        presencePenalty: presencePenalty,
       );
 
       // 8) 完成态落库并刷新会话摘要；同时将缓存命中写入独立记录表
@@ -1219,6 +1297,39 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           curve: Curves.easeOut,
         );
       }
+    });
+  }
+
+  /// R12：跨会话搜索跳转定位。先按索引估算位置滚动，待目标消息
+  /// 构建后再用 GlobalKey 精确定位到可见区域中部。
+  void _scrollToMessage(List<ChatMessage> messages, int messageId) {
+    final index = messages.indexWhere((m) => m.id == messageId);
+    if (index < 0) {
+      ref.read(pendingSearchMessageIdProvider.notifier).state = null;
+      return;
+    }
+    if (!_scrollController.hasClients) {
+      ref.read(pendingSearchMessageIdProvider.notifier).state = null;
+      return;
+    }
+    final estimated = (index * 96.0)
+        .clamp(0.0, _scrollController.position.maxScrollExtent)
+        .toDouble();
+    _scrollController.jumpTo(estimated);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final key = _messageKeys[messageId];
+      final ctx = key?.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+          alignment: 0.3,
+        );
+      }
+      ref.read(pendingSearchMessageIdProvider.notifier).state = null;
+      _showSnack('已定位到搜索结果');
     });
   }
 }

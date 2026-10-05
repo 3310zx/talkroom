@@ -1,7 +1,7 @@
 name: llm_chat_app
 description: "LLM Chat App：Flutter 跨平台第三方 LLM 对话客户端（微信风格界面，支持 OpenAI 兼容 API、主动消息、局域网双端同步）。详见 PRD 第 1-9 章。"
 publish_to: "none"
-version: 1.0.14
+version: 1.0.15
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -70,6 +70,15 @@ dependencies:
   # 与 pubspec version 保持一致（避免引入 package_info_plus 的 Kotlin/AGP 兼容问题）。
   # 检查更新（P2）：打开 APK 下载链接
   url_launcher: ^6.3.0
+
+  # 会话导出 PDF（R11：Markdown/纯文本/PDF 导出，PRD 6.3）
+  pdf: ^3.10.7
+
+  # 局域网同步二维码（R15：电脑端展示配对二维码，扫码自动填写）
+  qr_flutter: ^4.1.0
+
+  # 局域网同步扫码配对（R15：手机端扫描电脑二维码自动配对）
+  mobile_scanner: ^5.2.3
 
 # 依赖覆盖：path_provider_foundation 2.5+ 与 sqlite3 3.x 引入 native assets
 # （objective_c / code_assets hook），构建 macOS 目标需要完整 Xcode/工具链。

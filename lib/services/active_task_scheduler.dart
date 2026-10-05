@@ -3,6 +3,7 @@ import 'dart:async';
 import '../../core/constants.dart';
 import '../../data/secure_storage/api_key_store.dart';
 import '../../domain/models/active_task.dart';
+import '../../domain/models/active_task_log.dart';
 import '../../domain/models/active_task_schedule.dart';
 import '../../domain/models/api_config.dart';
 import '../../domain/models/conversation.dart';
@@ -143,6 +144,7 @@ class ActiveTaskScheduler {
   ///   由 [_runTask] 内的 shouldNotifyDuring 决策）。
   Future<void> _executeWithQuietCheck(ActiveTask task) async {
     final taskId = task.id;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
     if (taskId == null || _running.contains(taskId)) return;
     if (task.shouldSkipRun(DateTime.now())) {
       final schedule = ActiveTaskSchedule.fromJson(
@@ -154,6 +156,7 @@ class ActiveTaskScheduler {
         lastStatus: 'skipped',
         nextRunAt: nextRun,
       ));
+      await _writeLog(taskId, nowMs, 'skipped', '静默时段内跳过本次执行');
       _failCounts.remove(taskId);
       await _notifyChanged();
       return;
@@ -372,6 +375,21 @@ class ActiveTaskScheduler {
     final v = settings[key];
     if (v == null) return fallback;
     return int.tryParse(v) ?? fallback;
+  }
+
+  /// 写入任务执行日志（R16，v1.0.15）：成功 / 失败 / 跳过均留痕。
+  Future<void> _writeLog(int taskId, int runAtMs, String status, String summary) async {
+    try {
+      await _activeTaskRepository.insertLog(ActiveTaskLog(
+        taskId: taskId,
+        runAt: runAtMs,
+        status: status,
+        summary: summary,
+        createdAt: runAtMs,
+      ));
+    } catch (_) {
+      // 日志写入失败不影响任务主流程。
+    }
   }
 
   /// 会话列表摘要：去 Markdown 标记后的纯文本，截断 40 字。

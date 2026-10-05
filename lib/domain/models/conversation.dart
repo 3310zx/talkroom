@@ -8,6 +8,12 @@ class Conversation {
   final double? temperature;
   final int? maxTokens;
   final double? topP;
+
+  /// 频率惩罚（R14，v1.0.15 / DB version 7 起；NULL 表示跟随全局默认）
+  final double? frequencyPenalty;
+
+  /// 存在惩罚（R14，v1.0.15 / DB version 7 起；NULL 表示跟随全局默认）
+  final double? presencePenalty;
   final bool pinned;
 
   /// 是否已归档（v1.0.13 / DB version 5 起；归档会话移入归档列表，可从归档恢复）
@@ -29,6 +35,8 @@ class Conversation {
     this.temperature,
     this.maxTokens,
     this.topP,
+    this.frequencyPenalty,
+    this.presencePenalty,
     this.pinned = false,
     this.archived = false,
     this.promptTemplateId,
@@ -46,6 +54,8 @@ class Conversation {
     double? temperature,
     int? maxTokens,
     double? topP,
+    double? frequencyPenalty,
+    double? presencePenalty,
     bool? pinned,
     bool? archived,
     int? promptTemplateId,
@@ -62,6 +72,8 @@ class Conversation {
       temperature: temperature ?? this.temperature,
       maxTokens: maxTokens ?? this.maxTokens,
       topP: topP ?? this.topP,
+      frequencyPenalty: frequencyPenalty ?? this.frequencyPenalty,
+      presencePenalty: presencePenalty ?? this.presencePenalty,
       pinned: pinned ?? this.pinned,
       archived: archived ?? this.archived,
       promptTemplateId: promptTemplateId ?? this.promptTemplateId,
@@ -81,6 +93,8 @@ class Conversation {
       'temperature': temperature,
       'max_tokens': maxTokens,
       'top_p': topP,
+      'frequency_penalty': frequencyPenalty,
+      'presence_penalty': presencePenalty,
       'pinned': pinned ? 1 : 0,
       'archived': archived ? 1 : 0,
       'prompt_template_id': promptTemplateId,
@@ -100,12 +114,36 @@ class Conversation {
       temperature: (map['temperature'] as num?)?.toDouble(),
       maxTokens: map['max_tokens'] as int?,
       topP: (map['top_p'] as num?)?.toDouble(),
+      frequencyPenalty: (map['frequency_penalty'] as num?)?.toDouble(),
+      presencePenalty: (map['presence_penalty'] as num?)?.toDouble(),
       pinned: (map['pinned'] as int? ?? 0) == 1,
       archived: (map['archived'] as int? ?? 0) == 1,
       promptTemplateId: map['prompt_template_id'] as int?,
       lastMessage: map['last_message'] as String? ?? '',
       updatedAt: map['updated_at'] as int? ?? 0,
       createdAt: map['created_at'] as int? ?? 0,
+    );
+  }
+
+  /// 清空会话级参数覆盖（R14：恢复为跟随全局默认设置）。
+  Conversation clearedParamOverrides() {
+    return Conversation(
+      id: id,
+      title: title,
+      apiConfigId: apiConfigId,
+      modelId: modelId,
+      systemPrompt: null,
+      temperature: null,
+      maxTokens: null,
+      topP: null,
+      frequencyPenalty: null,
+      presencePenalty: null,
+      pinned: pinned,
+      archived: archived,
+      promptTemplateId: promptTemplateId,
+      lastMessage: lastMessage,
+      updatedAt: updatedAt,
+      createdAt: createdAt,
     );
   }
 }

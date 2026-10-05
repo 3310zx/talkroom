@@ -19,6 +19,8 @@ abstract final class AppConstants {
   static const String settingTemperature = 'temperature';
   static const String settingMaxTokens = 'max_tokens';
   static const String settingTopP = 'top_p';
+  static const String settingFrequencyPenalty = 'frequency_penalty';
+  static const String settingPresencePenalty = 'presence_penalty';
   static const String settingSystemPrompt = 'system_prompt';
   static const String settingQuietStart = 'quiet_start';
   static const String settingQuietEnd = 'quiet_end';
@@ -78,4 +80,6 @@ abstract final class AppConstants {
   static const double defaultTemperature = 0.7;
   static const int defaultMaxTokens = 2048;
   static const double defaultTopP = 1.0;
+  static const double defaultFrequencyPenalty = 0.0;
+  static const double defaultPresencePenalty = 0.0;
 }
