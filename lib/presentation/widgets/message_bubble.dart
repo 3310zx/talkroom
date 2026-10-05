@@ -89,14 +89,9 @@ class MessageBubble extends StatelessWidget {
                   ),
                 ),
             ],
-            if (isUser)
-              Text(content, style: theme.textTheme.bodyLarge)
-            else if (content.trim().isEmpty && !hasReasoning)
-              Text(
-                isStreaming ? '正在思考…' : '',
-                style: theme.textTheme.bodyLarge,
-              )
-            else if (content.trim().isNotEmpty)
+            // 统一渲染：用户消息与助手消息都经 flutter_markdown 渲染，
+            // 避免标题/列表/加粗等基础语法在部分消息中显示为原始标记符号。
+            if (content.trim().isNotEmpty)
               MarkdownBody(
                 data: content,
                 selectable: true,
@@ -106,6 +101,11 @@ class MessageBubble extends StatelessWidget {
                 styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
                   p: theme.textTheme.bodyLarge,
                 ),
+              )
+            else if (!hasReasoning)
+              Text(
+                isStreaming ? '正在思考…' : '',
+                style: theme.textTheme.bodyLarge,
               ),
             if (isStreaming)
               Padding(

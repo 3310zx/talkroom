@@ -1,6 +1,8 @@
+import 'dart:io';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../application/providers/api_configs_provider.dart';
 import '../../application/providers/local_server_provider.dart';
@@ -8,6 +10,7 @@ import '../../application/providers/settings_provider.dart';
 import '../../application/providers/sync_provider.dart';
 import '../../core/constants.dart';
 import '../../core/theme.dart';
+import '../../services/apk_downloader.dart';
 import '../../services/update_service.dart';
 import '../active_tasks/active_tasks_page.dart';
 import '../api_config/api_config_list_page.dart';
@@ -370,7 +373,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           if (canDownload)
             FilledButton.icon(
-              onPressed: () => _downloadApk(update.apkUrl!),
+              onPressed: () {
+                Navigator.of(context).pop();
+                _showDownloadDialog(update);
+              },
               icon: const Icon(Icons.download),
               label: const Text('下载 APK'),
             ),
@@ -379,13 +385,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     );
   }
 
-  /// 打开 APK 下载链接（浏览器/外部应用）。
-  Future<void> _downloadApk(String url) async {
-    final uri = Uri.parse(url);
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!ok && mounted) {
-      _showSnack('无法打开下载链接：$url');
-    }
+  /// 应用内下载对话框：下载进度 / 完成态「安装」按钮 / 失败重试。
+  Future<void> _showDownloadDialog(UpdateInfo update) async {
+    final version = update.version.startsWith('v')
+        ? update.version
+        : 'v${update.version}';
+    final url = update.apkUrl;
+    if (url == null || url.isEmpty) return;
+    final fileName = 'llm_chat_app_$version.apk';
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _DownloadDialog(url: url, fileName: fileName),
+    );
   }
 
   void _showSnack(String message) {
@@ -496,5 +508,182 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     await notifier.set(AppConstants.settingTopP, topPCtrl.text.trim());
     await notifier.set(
         AppConstants.settingSystemPrompt, systemPromptCtrl.text.trim());
+  }
+}
+
+/// 应用内下载对话框（设置页「检查更新 → 下载 APK」）。
+///
+/// 状态机：downloading（进度 + 取消）→ done（安装 / 重新下载）/
+/// failed（重试）。下载完成后展示「安装」按钮，经 FileProvider +
+/// ACTION_VIEW 拉起系统安装器；Android 8+ 未开启「安装未知应用」权限时
+/// 原生层会先跳转系统设置引导。
+class _DownloadDialog extends StatefulWidget {
+  const _DownloadDialog({required this.url, required this.fileName});
+
+  final String url;
+  final String fileName;
+
+  @override
+  State<_DownloadDialog> createState() => _DownloadDialogState();
+}
+
+class _DownloadDialogState extends State<_DownloadDialog> {
+  CancelToken? _cancelToken;
+  bool _downloading = true;
+  int _received = 0;
+  int? _total;
+  String? _error;
+  String? _apkPath;
+
+  @override
+  void initState() {
+    super.initState();
+    _start();
+  }
+
+  Future<void> _start() async {
+    setState(() {
+      _downloading = true;
+      _error = null;
+      _received = 0;
+      _total = null;
+      _apkPath = null;
+    });
+    _cancelToken = CancelToken();
+    try {
+      final path = await ApkDownloader().downloadApk(
+        url: widget.url,
+        fileName: widget.fileName,
+        onProgress: (received, total) {
+          if (!mounted) return;
+          setState(() {
+            _received = received;
+            _total = total;
+          });
+        },
+        cancelToken: _cancelToken,
+      );
+      if (!mounted) return;
+      setState(() {
+        _downloading = false;
+        _apkPath = path;
+      });
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.cancel) {
+        if (mounted) Navigator.of(context).pop();
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _downloading = false;
+        _error = '下载失败：${e.message ?? '网络异常'}';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _downloading = false;
+        _error = '下载失败：$e';
+      });
+    }
+  }
+
+  Future<void> _install() async {
+    final path = _apkPath;
+    if (path == null) return;
+    if (!Platform.isAndroid) {
+      _toast('当前平台不支持直接安装 APK。文件已保存到：\n$path');
+      return;
+    }
+    final ok = await ApkInstaller.install(path);
+    if (!ok && mounted) {
+      _toast('未能拉起安装器。Android 8+ 需先开启「安装未知应用」权限，'
+          '请到系统设置完成授权后重新点击安装。');
+    }
+  }
+
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  String _fmtMb(int bytes) => '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final progress = _total == null || _total == 0
+        ? 0.0
+        : (_received / _total!).clamp(0.0, 1.0).toDouble();
+
+    return AlertDialog(
+      title: const Text('下载新版本'),
+      content: SizedBox(
+        width: 320,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_downloading) ...[
+              LinearProgressIndicator(value: progress),
+              const SizedBox(height: 12),
+              Text(
+                _total != null
+                    ? '${_fmtMb(_received)} / ${_fmtMb(_total!)}'
+                        '（${(progress * 100).toStringAsFixed(0)}%）'
+                    : _fmtMb(_received),
+                style: theme.textTheme.bodyMedium,
+                textAlign: TextAlign.center,
+              ),
+            ] else if (_apkPath != null) ...[
+              Icon(Icons.check_circle,
+                  color: Colors.green, size: 40),
+              const SizedBox(height: 12),
+              Text('下载完成 · ${_fmtMb(_received)}',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium),
+              const SizedBox(height: 4),
+              Text('APK 已保存到应用目录，点击「安装」使用系统安装器',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall),
+            ] else ...[
+              Icon(Icons.error_outline, color: theme.colorScheme.error, size: 36),
+              const SizedBox(height: 12),
+              Text(_error ?? '下载失败',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        if (_downloading)
+          TextButton(
+            onPressed: () => _cancelToken?.cancel(),
+            child: const Text('取消'),
+          )
+        else if (_apkPath != null) ...[
+          TextButton(
+            onPressed: _start,
+            child: const Text('重新下载'),
+          ),
+          FilledButton.icon(
+            onPressed: _install,
+            icon: const Icon(Icons.system_update_alt),
+            label: const Text('安装'),
+          ),
+        ] else ...[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('关闭'),
+          ),
+          FilledButton(
+            onPressed: _start,
+            child: const Text('重试'),
+          ),
+        ],
+      ],
+    );
   }
 }

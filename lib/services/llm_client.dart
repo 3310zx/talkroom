@@ -89,6 +89,9 @@ class LlmClient {
     required String model,
     required List<Map<String, String>> messages,
     required void Function(String delta) onDelta,
+    /// 思维链增量回调（可选）：reasoning_content 每到达一段即回调，
+    /// 供界面实时累积到思维链折叠卡片（与正文分离展示）。
+    void Function(String delta)? onReasoningDelta,
     CancelToken? cancelToken,
     double? temperature,
     int? maxTokens,
@@ -171,10 +174,12 @@ class LlmClient {
             receivedContent = true;
           }
           // 思维链增量：进入独立 reasoningBuffer（与正文分离展示），
-          // 不回调 onDelta，避免界面将思维链误拼入正文。
+          // 不回调用户正文 onDelta；若提供了 onReasoningDelta 则实时回调，
+          // 让界面在生成过程中即可看到思维链折叠卡片。
           final reasoning = delta['reasoning_content'];
           if (reasoning is String && reasoning.isNotEmpty) {
             reasoningBuffer.write(reasoning);
+            onReasoningDelta?.call(reasoning);
             receivedContent = true;
           }
         }

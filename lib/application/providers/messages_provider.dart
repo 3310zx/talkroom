@@ -45,6 +45,21 @@ class MessagesNotifier extends StateNotifier<List<ChatMessage>> {
     ];
   }
 
+  /// 追加流式思维链增量片段：reasoning_content 每到达一段即累积到
+  /// reasoningContent（与正文分离），使生成过程中即可看到思维链卡片。
+  void appendReasoningFragment(int messageId, String fragment) {
+    state = [
+      for (final m in state)
+        if (m.id == messageId)
+          m.copyWith(
+            reasoningContent: (m.reasoningContent ?? '') + fragment,
+            status: 'streaming',
+          )
+        else
+          m,
+    ];
+  }
+
   void clear() {
     state = const [];
   }

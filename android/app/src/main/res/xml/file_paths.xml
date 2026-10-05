@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 应用内更新 FileProvider 路径白名单：
+     - files-path 覆盖 getApplicationSupportDirectory()（Android 为内部 files 目录），
+       APK 下载到 files/updates 下，安装时通过该映射授权系统安装器访问。 -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="internal_files" path="."/>
+    <cache-path name="cache" path="."/>
+    <external-files-path name="external_files" path="."/>
+</paths>

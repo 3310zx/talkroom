@@ -336,6 +336,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               .appendStreamingFragment(assistantId, delta);
           _scrollToBottom();
         },
+        onReasoningDelta: (delta) {
+          // 思维链增量实时累积到消息的 reasoningContent（与正文分离），
+          // 使生成过程中即可看到「思考过程」折叠卡片。
+          ref.read(messagesProvider.notifier)
+              .appendReasoningFragment(assistantId, delta);
+          _scrollToBottom();
+        },
         cancelToken: _cancelToken,
         temperature: temperature,
         maxTokens: maxTokens,
