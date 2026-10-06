@@ -137,26 +137,32 @@ class MessageBubble extends StatelessWidget {
               // 避免标题/列表/加粗等基础语法在部分消息中显示为原始标记符号。
               // 数学公式（R1）：注册 math_block / math_inline 语法与构建器，
               // 块级 $$...$$ 与行内 $...$ 渲染为公式形态而非纯文本。
+              // v1.0.18 修复：气泡 shrink-wrap 导致 MarkdownBody 处于无界宽度
+              // 环境，列表/长文本不换行被裁切或与相邻元素重叠；用
+              // SizedBox(width: double.infinity) 提供有界宽度，使其正常换行。
               if (content.trim().isNotEmpty)
-                MarkdownBody(
-                  data: content,
-                  selectable: true,
-                  extensionSet: md.ExtensionSet(
-                    md.ExtensionSet.gitHubFlavored.blockSyntaxes +
-                        [_MathBlockSyntax()],
-                    md.ExtensionSet.gitHubFlavored.inlineSyntaxes +
-                        [_MathInlineSyntax()],
-                  ),
-                  builders: {
-                    'pre': _CodeBlockBuilder(),
-                    'math_block': _MathBuilder(inline: false),
-                    'math_inline': _MathBuilder(inline: true),
-                    'table': _TableBuilder(),
-                    'img': _MarkdownImageBuilder(),
-                    'a': _LinkBuilder(),
-                  },
-                  styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-                    p: theme.textTheme.bodyLarge,
+                SizedBox(
+                  width: double.infinity,
+                  child: MarkdownBody(
+                    data: content,
+                    selectable: true,
+                    extensionSet: md.ExtensionSet(
+                      md.ExtensionSet.gitHubFlavored.blockSyntaxes +
+                          [_MathBlockSyntax()],
+                      md.ExtensionSet.gitHubFlavored.inlineSyntaxes +
+                          [_MathInlineSyntax()],
+                    ),
+                    builders: {
+                      'pre': _CodeBlockBuilder(),
+                      'math_block': _MathBuilder(inline: false),
+                      'math_inline': _MathBuilder(inline: true),
+                      'table': _TableBuilder(),
+                      'img': _MarkdownImageBuilder(),
+                      'a': _LinkBuilder(),
+                    },
+                    styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+                      p: theme.textTheme.bodyLarge,
+                    ),
                   ),
                 )
               else if (!hasReasoning)
