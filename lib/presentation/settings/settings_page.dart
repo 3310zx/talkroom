@@ -58,6 +58,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final themeMode = AppThemeMode.fromValue(
       settings[AppConstants.settingThemeMode],
     );
+    final seedMode = AppSeedMode.fromValue(
+      settings[AppConstants.settingThemeSeedMode],
+    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
@@ -70,6 +73,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             subtitle: Text(themeMode.label),
             trailing: const Icon(Icons.chevron_right),
             onTap: _editThemeMode,
+          ),
+          ListTile(
+            leading: const Icon(Icons.palette_outlined),
+            title: const Text('主题色'),
+            subtitle: Text(_seedModeSubtitle(seedMode, settings)),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _editThemeSeedMode,
           ),
           ListTile(
             leading: const Icon(Icons.restart_alt),
@@ -256,6 +266,237 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     await ref
         .read(settingsProvider.notifier)
         .set(AppConstants.settingThemeMode, selected.value);
+  }
+
+  /// 「主题色」入口副标题。
+  String _seedModeSubtitle(
+    AppSeedMode mode,
+    Map<String, String?> settings,
+  ) {
+    switch (mode) {
+      case AppSeedMode.custom:
+        final hex = settings[AppConstants.settingThemeCustomSeed];
+        return '自定义 ${hex == null || hex.isEmpty ? '（未设置，默认微信绿）' : hex}';
+      case AppSeedMode.monet:
+        return '莫奈 · 跟随系统壁纸动态取色（Android 12+）';
+      case AppSeedMode.preset:
+        return '默认（微信绿）';
+    }
+  }
+
+  /// 选择主题取色源（preset / custom / monet），持久化到 settings 表。
+  ///
+  /// bottom sheet 内支持：模式切换、预设色板点选、HEX 输入，实时预览主色效果。
+  Future<void> _editThemeSeedMode() async {
+    final settings = ref.read(settingsProvider);
+    final initialMode =
+        AppSeedMode.fromValue(settings[AppConstants.settingThemeSeedMode]);
+    final initialHex = settings[AppConstants.settingThemeCustomSeed] ?? '';
+    var mode = initialMode;
+    var hex = initialHex;
+    var hexValid = AppTheme.parseHexColor(hex) != null;
+    final hexController = TextEditingController(text: hex);
+    try {
+      final confirmed = await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (sheetContext) => StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            final previewSeed = mode == AppSeedMode.custom
+                ? (AppTheme.parseHexColor(hex) ?? AppTheme.brandGreen)
+                : AppTheme.brandGreen;
+            final previewScheme =
+                ColorScheme.fromSeed(seedColor: previewSeed);
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 20,
+                  right: 20,
+                  top: 12,
+                  bottom: 16 + MediaQuery.of(sheetContext).viewInsets.bottom,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 36,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color:
+                              Theme.of(sheetContext).colorScheme.outlineVariant,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '主题色',
+                      style: Theme.of(sheetContext).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '选择取色来源；自定义模式下可从预设色板取色或直接输入 HEX，效果实时预览。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(sheetContext).colorScheme.outline,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _SeedPreviewCard(scheme: previewScheme, mode: mode),
+                    const SizedBox(height: 12),
+                    RadioGroup<AppSeedMode>(
+                      groupValue: mode,
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setSheetState(() {
+                          mode = value;
+                          if (value == AppSeedMode.custom && !hexValid) {
+                            hex = '#07C160';
+                            hexController.text = hex;
+                            hexValid = true;
+                          }
+                        });
+                      },
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (final m in AppSeedMode.values)
+                            RadioListTile<AppSeedMode>(
+                              value: m,
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(m.label),
+                              subtitle: m == AppSeedMode.monet
+                                  ? const Text(
+                                      '跟随系统壁纸动态取色，需 Android 12+',
+                                    )
+                                  : (m == AppSeedMode.custom
+                                      ? const Text(
+                                          '预设色板或 HEX 输入自定义主色',
+                                        )
+                                      : null),
+                            ),
+                        ],
+                      ),
+                    ),
+                    if (mode == AppSeedMode.custom) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        '预设色板',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Theme.of(sheetContext).colorScheme.outline,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: [
+                          for (final c in AppTheme.presetPalette)
+                            _paletteDot(
+                              c,
+                              selected: AppTheme.parseHexColor(hex) == c,
+                              onTap: () => setSheetState(() {
+                                hex = '#${(c.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+                                hexController.text = hex;
+                                hexValid = true;
+                              }),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: hexController,
+                        decoration: InputDecoration(
+                          labelText: 'HEX 色值',
+                          hintText: '#07C160',
+                          errorText: hex.isEmpty || hexValid
+                              ? null
+                              : '无效 HEX 色值',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          isDense: true,
+                        ),
+                        onChanged: (v) => setSheetState(() {
+                          hex = v;
+                          hexValid = AppTheme.parseHexColor(v) != null;
+                        }),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: () {
+                        if (mode == AppSeedMode.custom && !hexValid) return;
+                        Navigator.of(sheetContext).pop(true);
+                      },
+                      child: const Text('确定'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      );
+      if (confirmed != true) return;
+      final notifier = ref.read(settingsProvider.notifier);
+      await notifier.set(AppConstants.settingThemeSeedMode, mode.value);
+      if (mode == AppSeedMode.custom) {
+        final parsed = AppTheme.parseHexColor(hex);
+        if (parsed != null) {
+          final normalized =
+              '#${(parsed.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+          await notifier.set(
+            AppConstants.settingThemeCustomSeed,
+            normalized,
+          );
+        }
+      }
+    } finally {
+      hexController.dispose();
+    }
+  }
+
+  /// 预设色板圆形色块（选中态带描边与勾选图标）。
+  Widget _paletteDot(
+    Color color, {
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: selected
+                ? Theme.of(context).colorScheme.onSurface
+                : Theme.of(context).colorScheme.outlineVariant,
+            width: selected ? 3 : 1,
+          ),
+        ),
+        child: selected
+            ? Icon(
+                Icons.check,
+                size: 16,
+                color: color.computeLuminance() > 0.5
+                    ? Colors.black87
+                    : Colors.white,
+              )
+            : null,
+      ),
+    );
   }
 
   /// 选择启动行为（回到退出时的对话 / 创建新对话），持久化到 settings 表。
@@ -788,6 +1029,83 @@ class _DownloadDialogState extends State<_DownloadDialog> {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// 主题色 bottom sheet 的实时预览卡片（模拟主色 / 容器色 / 导航指示器）。
+class _SeedPreviewCard extends StatelessWidget {
+  const _SeedPreviewCard({required this.scheme, required this.mode});
+
+  final ColorScheme scheme;
+  final AppSeedMode mode;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          _swatch(scheme.primary, scheme.onPrimary, '主色'),
+          const SizedBox(width: 8),
+          _swatch(scheme.primaryContainer, scheme.onPrimaryContainer, '容器色'),
+          const SizedBox(width: 8),
+          // 导航栏指示器效果模拟
+          Container(
+            width: 64,
+            height: 48,
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainer,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            alignment: Alignment.center,
+            child: Container(
+              width: 36,
+              height: 24,
+              decoration: BoxDecoration(
+                color: scheme.primary.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+          const Spacer(),
+          if (mode == AppSeedMode.monet)
+            const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.wallpaper_outlined, size: 16),
+                SizedBox(width: 4),
+                Text('壁纸动态色', style: TextStyle(fontSize: 11)),
+              ],
+            )
+          else
+            Text(
+              '#${(scheme.primary.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}',
+              style: TextStyle(fontSize: 11, color: scheme.outline),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _swatch(Color bg, Color fg, String label) {
+    return Container(
+      width: 56,
+      height: 48,
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 11, color: fg),
+      ),
     );
   }
 }

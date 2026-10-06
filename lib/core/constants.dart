@@ -4,7 +4,7 @@ abstract final class AppConstants {
   static const String appName = 'LLM Chat';
 
   /// 当前应用版本号（与 pubspec.yaml 的 version 保持一致；检查更新时与远端 tag 比对）
-  static const String appVersion = '1.2.1';
+  static const String appVersion = '1.2.2';
 
   /// 未绑定 API 配置时的会话标题
   static const String defaultConversationTitle = '新会话';
@@ -68,6 +68,12 @@ abstract final class AppConstants {
   // ---- 外观主题 ----
   /// 主题模式（'system' 跟随系统 / 'light' 浅色 / 'dark' 深色）
   static const String settingThemeMode = 'theme_mode';
+
+  /// 主题取色源（'preset' 默认微信绿 / 'custom' 自定义取色 / 'monet' 莫奈壁纸动态）
+  static const String settingThemeSeedMode = 'theme_seed_mode';
+
+  /// 自定义取色 seed（HEX 色值字符串，如 '#FF0000'；仅在 custom 模式生效）
+  static const String settingThemeCustomSeed = 'theme_custom_seed';
 
   // ---- 启动行为 ----
   /// 启动行为（'last' 回到退出时的对话 / 'new' 创建新对话，默认 'new'）

@@ -33,6 +33,32 @@ extension on Iterable<AppThemeMode> {
   }
 }
 
+/// 主题取色源模式（与 [AppThemeMode] 正交：亮暗 vs 取色来源）。
+enum AppSeedMode {
+  preset('preset', '默认（微信绿）'),
+  custom('custom', '自定义取色'),
+  monet('monet', '莫奈（壁纸动态）');
+
+  const AppSeedMode(this.value, this.label);
+
+  /// 持久化存储值
+  final String value;
+  /// 设置页展示名
+  final String label;
+
+  static AppSeedMode fromValue(String? value) => AppSeedMode.values
+      .where((m) => m.value == value)
+      .firstOrNull ??
+      AppSeedMode.preset;
+}
+
+extension on Iterable<AppSeedMode> {
+  AppSeedMode? get firstOrNull {
+    final iterator = this.iterator;
+    return iterator.moveNext() ? iterator.current : null;
+  }
+}
+
 /// 全局主题：微信绿 M3 方案（M3 语义色 token + 组件主题）。
 ///
 /// 深浅色统一走 ColorScheme.fromSeed 生成路线，surface/outline/error 等
@@ -51,48 +77,119 @@ abstract final class AppTheme {
   /// 全局界面字体（与导出 PDF 同族字体）
   static const String fontFamily = 'NotoSansSC';
 
-  static ThemeData get light => _build(Brightness.light);
-  static ThemeData get dark => _build(Brightness.dark);
+  /// 预设色板（设置页「主题色」自定义取色用，8-12 个品牌色）
+  static const List<Color> presetPalette = <Color>[
+    Color(0xFF07C160), // 微信绿
+    Color(0xFF4CAF50), // Material 绿
+    Color(0xFF2196F3), // 蓝
+    Color(0xFF0E7AE6), // 微信蓝
+    Color(0xFF8E44AD), // 紫
+    Color(0xFFE91E63), // 粉红
+    Color(0xFFFF7043), // 橙
+    Color(0xFFE74C3C), // 红
+    Color(0xFF16A085), // 青
+    Color(0xFF34495E), // 深蓝灰
+    Color(0xFFF5A623), // 琥珀
+    Color(0xFF795548), // 棕
+  ];
 
-  static ThemeData _build(Brightness brightness) {
+  /// 解析 HEX 颜色字符串（支持 #RRGGBB / RRGGBB / #AARRGGBB），失败返回 null。
+  static Color? parseHexColor(String? hex) {
+    if (hex == null) return null;
+    var s = hex.trim().replaceAll('#', '');
+    if (s.length == 6) s = 'FF$s';
+    if (s.length != 8) return null;
+    final v = int.tryParse(s, radix: 16);
+    return v == null ? null : Color(v);
+  }
+
+  /// 深色模式主色提亮（保证自定义深色主题对比度）
+  static Color _liftForDark(Color c) => Color.lerp(c, Colors.white, 0.30)!;
+
+  static ThemeData get light => build();
+  static ThemeData get dark => build(brightness: Brightness.dark);
+
+  /// 按指定 seed 构建主题（preset / custom 模式）。
+  static ThemeData build({
+    Color seed = brandGreen,
+    Brightness brightness = Brightness.light,
+  }) =>
+      _build(brightness, seed: seed);
+
+  /// 莫奈模式：直接使用系统动态 scheme 构建主题；
+  /// [dynamicScheme] 为 null（非 Android 12+）时降级为普通 seed 构建。
+  static ThemeData monet(
+    ColorScheme? dynamicScheme, {
+    Brightness brightness = Brightness.light,
+  }) =>
+      _build(
+        brightness,
+        useDynamic: dynamicScheme != null,
+        dynamicScheme: dynamicScheme,
+      );
+
+  static ThemeData _build(
+    Brightness brightness, {
+    Color seed = brandGreen,
+    bool useDynamic = false,
+    ColorScheme? dynamicScheme,
+  }) {
     final isDark = brightness == Brightness.dark;
 
-    // M3：以微信绿为 seed 生成完整 tonal palette，再显式补全/固定关键语义 token。
-    final scheme = ColorScheme.fromSeed(
-      seedColor: brandGreen,
-      brightness: brightness,
-    ).copyWith(
-      // —— 品牌主色固定（避免 seed 漂移过远） ——
-      primary: isDark ? const Color(0xFF5FC95F) : brandGreen,
-      onPrimary: Colors.white,
-      primaryContainer:
-          isDark ? const Color(0xFF0F3D0F) : const Color(0xFFC9F3C9),
-      onPrimaryContainer:
-          isDark ? const Color(0xFFC9F3C9) : const Color(0xFF0E2A0E),
-      // —— surface 语义 token（聊天灰底 / 卡片分层） ——
-      surface: isDark ? const Color(0xFF111111) : Colors.white,
-      onSurface: isDark ? const Color(0xFFE4E4E4) : const Color(0xFF1B1B1B),
-      surfaceContainerLowest: isDark ? const Color(0xFF0C0C0C) : Colors.white,
-      surfaceContainerLow:
-          isDark ? const Color(0xFF171717) : const Color(0xFFF7F7F7),
-      surfaceContainer:
-          isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F2),
-      surfaceContainerHigh:
-          isDark ? const Color(0xFF232325) : const Color(0xFFECECEC),
-      surfaceContainerHighest:
-          isDark ? const Color(0xFF2A2A2C) : const Color(0xFFE4E4E4),
-      // —— outline 语义 token（分隔线 / 边框） ——
-      outline: isDark ? const Color(0xFF8A8A8E) : const Color(0xFF747474),
-      outlineVariant:
-          isDark ? const Color(0xFF3A3A3C) : const Color(0xFFDCDCDC),
-      // —— error 语义 token ——
-      error: isDark ? const Color(0xFFF2B8B5) : const Color(0xFFBA1A1A),
-      onError: Colors.white,
-      errorContainer: isDark ? const Color(0xFF93000A) : const Color(0xFFFFDAD6),
-      onErrorContainer:
-          isDark ? const Color(0xFFFFDAD6) : const Color(0xFF410002),
-    );
+    ColorScheme scheme;
+    if (useDynamic && dynamicScheme != null) {
+      // 莫奈：原样使用系统动态 scheme，禁止手工覆盖（否则壁纸色被固定值覆盖失效）
+      scheme = dynamicScheme;
+    } else {
+      // M3：以 seed 生成完整 tonal palette，再显式补全/固定关键语义 token。
+      final isPresetSeed = seed == brandGreen;
+      final base = ColorScheme.fromSeed(
+        seedColor: seed,
+        brightness: brightness,
+      );
+      scheme = base.copyWith(
+        // —— 品牌主色随 seed（预设=微信绿，深色保持历史提亮值；
+        //    自定义=用户色，深色自动提亮保证对比度） ——
+        primary: isPresetSeed
+            ? (isDark ? const Color(0xFF5FC95F) : brandGreen)
+            : (isDark ? _liftForDark(seed) : seed),
+        onPrimary: Colors.white,
+        // 预设模式保留历史固定容器色避免视觉漂移；自定义模式随 seed 自动生成
+        primaryContainer: isPresetSeed
+            ? (isDark ? const Color(0xFF0F3D0F) : const Color(0xFFC9F3C9))
+            : base.primaryContainer,
+        onPrimaryContainer: isPresetSeed
+            ? (isDark ? const Color(0xFFC9F3C9) : const Color(0xFF0E2A0E))
+            : base.onPrimaryContainer,
+        // —— surface 语义 token（聊天灰底 / 卡片分层） ——
+        surface: isDark ? const Color(0xFF111111) : Colors.white,
+        onSurface: isDark ? const Color(0xFFE4E4E4) : const Color(0xFF1B1B1B),
+        surfaceContainerLowest: isDark ? const Color(0xFF0C0C0C) : Colors.white,
+        surfaceContainerLow:
+            isDark ? const Color(0xFF171717) : const Color(0xFFF7F7F7),
+        surfaceContainer:
+            isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F2),
+        surfaceContainerHigh:
+            isDark ? const Color(0xFF232325) : const Color(0xFFECECEC),
+        surfaceContainerHighest:
+            isDark ? const Color(0xFF2A2A2C) : const Color(0xFFE4E4E4),
+        // —— outline 语义 token（分隔线 / 边框） ——
+        outline: isDark ? const Color(0xFF8A8A8E) : const Color(0xFF747474),
+        outlineVariant:
+            isDark ? const Color(0xFF3A3A3C) : const Color(0xFFDCDCDC),
+        // —— error 语义 token ——
+        error: isDark ? const Color(0xFFF2B8B5) : const Color(0xFFBA1A1A),
+        onError: Colors.white,
+        errorContainer: isDark ? const Color(0xFF93000A) : const Color(0xFFFFDAD6),
+        onErrorContainer:
+            isDark ? const Color(0xFFFFDAD6) : const Color(0xFF410002),
+      );
+    }
 
+    return _buildThemeData(scheme, isDark: isDark);
+  }
+
+  static ThemeData _buildThemeData(ColorScheme scheme, {required bool isDark}) {
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
@@ -118,7 +215,7 @@ abstract final class AppTheme {
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: isDark ? scheme.surfaceContainer : Colors.white,
-        indicatorColor: brandGreen.withValues(alpha: 0.16),
+        indicatorColor: scheme.primary.withValues(alpha: 0.16),
         labelTextStyle: WidgetStatePropertyAll(
           TextStyle(
             fontSize: 12,
@@ -128,9 +225,9 @@ abstract final class AppTheme {
       ),
       navigationRailTheme: NavigationRailThemeData(
         backgroundColor: isDark ? scheme.surfaceContainer : Colors.white,
-        selectedIconTheme: const IconThemeData(color: brandGreen),
-        selectedLabelTextStyle: const TextStyle(
-          color: brandGreen,
+        selectedIconTheme: IconThemeData(color: scheme.primary),
+        selectedLabelTextStyle: TextStyle(
+          color: scheme.primary,
           fontWeight: FontWeight.w600,
         ),
         unselectedIconTheme: IconThemeData(
@@ -139,7 +236,7 @@ abstract final class AppTheme {
         unselectedLabelTextStyle: TextStyle(
           color: isDark ? Colors.white70 : Colors.black54,
         ),
-        indicatorColor: brandGreen.withValues(alpha: 0.16),
+        indicatorColor: scheme.primary.withValues(alpha: 0.16),
       ),
       dividerTheme: DividerThemeData(
         color: scheme.outlineVariant,
@@ -148,7 +245,7 @@ abstract final class AppTheme {
       ),
       listTileTheme: ListTileThemeData(
         selectedColor: isDark ? Colors.white : Colors.black87,
-        selectedTileColor: brandGreen.withValues(alpha: isDark ? 0.22 : 0.12),
+        selectedTileColor: scheme.primary.withValues(alpha: isDark ? 0.22 : 0.12),
         iconColor: isDark ? Colors.white70 : Colors.black54,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
