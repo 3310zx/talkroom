@@ -306,10 +306,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Widget _buildInputBar(BuildContext context) {
     final theme = Theme.of(context);
     final quote = _quoteContent;
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-        child: Column(
+    // Android 15+ edge-to-edge 下 MediaQuery.padding 为 0，SafeArea 失效；
+    // 改用 viewPadding 手动避让平板底部系统导航栏，键盘弹起时不受影响。
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 4, 12, 8 + bottomInset),
+      child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             // R9：待发送附件预览条（缩略图/文件卡片，可删除）。
@@ -476,7 +478,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             ),
           ],
         ),
-      ),
     );
   }
 

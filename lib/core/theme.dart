@@ -72,10 +72,12 @@ abstract final class AppTheme {
         thickness: 0.5,
       ),
       listTileTheme: ListTileThemeData(
-        selectedColor:
-            isDark ? const Color(0xFF2C2C2E) : const Color(0xFFEDEDED),
-        selectedTileColor:
-            isDark ? const Color(0xFF2C2C2E) : const Color(0xFFEDEDED),
+        // 深色模式选中项：品牌绿半透明高亮块，与 0xFF111111 背景形成明显对比；
+        // 选中前景（图标/标题）保持白色，保证可读性。
+        selectedColor: isDark ? Colors.white : Colors.black87,
+        selectedTileColor: isDark
+            ? brandGreen.withValues(alpha: 0.22)
+            : const Color(0xFFEDEDED),
       ),
       inputDecorationTheme: InputDecorationTheme(
         border: OutlineInputBorder(
