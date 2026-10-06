@@ -36,7 +36,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 8,
+      version: 9,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -240,6 +240,38 @@ class AppDatabase {
     // version 6 -> 7：会话级惩罚参数（R14）+ 主动任务执行日志（R16）
     if (oldVersion < 7) {
       await _migrateV7(db);
+    }
+    // version 8 -> 9：conversations 幂等补齐归档列（archived 等）
+    // 旧库升级时曾因缺少该列报 no such column: archived，须将版本抬到 9
+    // 才能让已处于 version 8 的库再次触发迁移。
+    if (oldVersion < 9) {
+      await _migrateV9(db);
+    }
+  }
+
+  /// version 8 -> 9 迁移：`conversations` 幂等补齐缺失列。
+  /// 对齐 _onCreate 中 version 9 的完整 schema：
+  /// - `archived`（会话归档，NOT NULL DEFAULT 0）
+  /// - `prompt_template_id`（提示词模板）
+  /// - `frequency_penalty` / `presence_penalty`（R14，v7 已加，此处幂等兜底）
+  Future<void> _migrateV9(Database db) async {
+    final cols = await db.rawQuery('PRAGMA table_info(conversations)');
+    final existing = cols.map((c) => c['name'] as String).toSet();
+    if (!existing.contains('archived')) {
+      await db.execute(
+          'ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!existing.contains('prompt_template_id')) {
+      await db.execute(
+          'ALTER TABLE conversations ADD COLUMN prompt_template_id INTEGER');
+    }
+    if (!existing.contains('frequency_penalty')) {
+      await db.execute(
+          'ALTER TABLE conversations ADD COLUMN frequency_penalty REAL');
+    }
+    if (!existing.contains('presence_penalty')) {
+      await db.execute(
+          'ALTER TABLE conversations ADD COLUMN presence_penalty REAL');
     }
   }
 
