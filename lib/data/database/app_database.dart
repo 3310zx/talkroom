@@ -36,7 +36,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 5,
+      version: 8,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
