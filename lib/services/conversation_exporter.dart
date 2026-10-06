@@ -20,7 +20,7 @@ import '../domain/models/message.dart';
 /// v1.0.18 变更：
 /// - Markdown / 纯文本改为流式写入（IOSink 分批 add + flush，最后 close），
 ///   避免大会话一次性 StringBuffer 拼接导致峰值内存过高；
-/// - PDF 打包中文字体 NotoSansSC-Regular.otf，正文使用 pw.Paragraph 自动换行，
+/// - PDF 打包中文字体 NotoSansSC-Regular.ttf，正文使用 pw.Paragraph 自动换行，
 ///   避免 helvetica 缺中文字形导致乱码、溢出与内存暴涨；
 /// - 导出前做规模防护：消息数 > 3000 或总文本 > 30MB 时抛出明确异常，
 ///   提示用户先精简会话或改用分页导出。
@@ -36,7 +36,7 @@ class ConversationExporter {
   static const int kMaxTotalChars = 30 * 1024 * 1024;
 
   /// PDF 中文字体资源路径（pubspec.yaml assets/fonts/ 已注册）。
-  static const String kPdfFontAsset = 'assets/fonts/NotoSansSC-Regular.otf';
+  static const String kPdfFontAsset = 'assets/fonts/NotoSansSC-Regular.ttf';
 
   /// 弹出格式选择并导出当前会话。
   static Future<void> exportConversation(
@@ -226,7 +226,7 @@ class ConversationExporter {
 
   /// PDF 导出：使用 pdf 包排版（标题 + 逐条消息）。
   ///
-  /// v1.0.18：加载 NotoSansSC-Regular.otf 中文字体；正文改用
+  /// v1.0.18：加载 NotoSansSC-Regular.ttf 中文字体；正文改用
   /// pw.Paragraph 自动换行（受页面宽度约束），避免长内容溢出与内存暴涨。
   static Future<Uint8List> _buildPdfBytes(
     Conversation conversation,
