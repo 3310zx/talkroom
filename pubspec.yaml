@@ -1,7 +1,7 @@
 name: llm_chat_app
 description: "LLM Chat App：Flutter 跨平台第三方 LLM 对话客户端（微信风格界面，支持 OpenAI 兼容 API、主动消息、局域网双端同步）。详见 PRD 第 1-9 章。"
 publish_to: "none"
-version: 1.2.0
+version: 1.2.1
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -73,6 +73,14 @@ dependencies:
 
   # 会话导出 PDF（R11：Markdown/纯文本/PDF 导出，PRD 6.3）
   pdf: ^3.10.7
+
+  # 文件解析器（v1.2.1：发送前解析本地文档提取文本，节省 token）
+  # syncfusion_flutter_pdf 纯 Dart PDF 文本层提取（pdfx 2.x 已移除文本提取
+  # API 且为平台插件，无法在 compute isolate/单测使用，故不用 pdfx）；
+  # archive+xml 解 docx document.xml 提取 w:t
+  syncfusion_flutter_pdf: ^35.1.37
+  archive: ^4.3.0
+  xml: ^7.0.1
 
   # 局域网同步二维码（R15：电脑端展示配对二维码，扫码自动填写）
   qr_flutter: ^4.1.0

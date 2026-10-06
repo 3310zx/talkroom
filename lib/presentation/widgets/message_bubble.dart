@@ -532,12 +532,42 @@ class _FileCard extends StatelessWidget {
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
+                // v1.2.1：文件解析状态行。
+                if (attachment.parseStatus != 'none')
+                  Text(
+                    _parseStatusLine(attachment),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: attachment.parseStatus == 'failed'
+                          ? theme.colorScheme.error
+                          : theme.colorScheme.primary,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
               ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  /// 解析状态展示文案。
+  String _parseStatusLine(MessageAttachment att) {
+    switch (att.parseStatus) {
+      case 'done':
+        final count = att.parsedCharCount ?? att.parsedText?.length ?? 0;
+        return '已解析 $count 字符，以文本发送';
+      case 'failed':
+        return '解析失败，建议转图片发送';
+      case 'skipped':
+        return '不支持解析，已原样发送';
+      case 'parsing':
+        return '解析中';
+      default:
+        return '';
+    }
   }
 }
 

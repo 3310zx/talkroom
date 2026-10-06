@@ -16,6 +16,11 @@ class MessageAttachment {
   final String? textPreview; // 文件：文本类内容预览（前 N 字符）
   final String? url; // 可选来源 URL（后续扩展）
 
+  // v1.2.1 文件解析器：发送前解析本地文档提取文本，节省 token。
+  final String? parsedText; // 解析出的文本（已按上限截断）
+  final int? parsedCharCount; // 解析的完整字符数（截断前）
+  final String parseStatus; // 'none' | 'parsing' | 'done' | 'failed' | 'skipped'
+
   const MessageAttachment({
     required this.type,
     required this.name,
@@ -24,15 +29,64 @@ class MessageAttachment {
     this.dataBase64,
     this.textPreview,
     this.url,
+    this.parsedText,
+    this.parsedCharCount,
+    this.parseStatus = 'none',
   });
 
   bool get isImage => type == 'image';
+
+  /// 解析成功且含文本（供多模态预检放行/发送文本块判断）。
+  bool get hasParsedText =>
+      parseStatus == 'done' && (parsedText?.isNotEmpty ?? false);
+
+  /// 解析状态中文标签（附件卡/气泡文件卡展示）。
+  String get parseStatusLabel {
+    switch (parseStatus) {
+      case 'parsing':
+        return '解析中';
+      case 'done':
+        return '已解析';
+      case 'failed':
+        return '解析失败';
+      case 'skipped':
+        return '跳过解析';
+      default:
+        return '';
+    }
+  }
 
   /// OpenAI 兼容 image_url data URL（如 `data:image/jpeg;base64,...`）。
   String? get imageDataUrl {
     final data = dataBase64;
     if (data == null || data.isEmpty) return null;
     return 'data:${mimeType ?? 'image/jpeg'};base64,$data';
+  }
+
+  MessageAttachment copyWith({
+    String? type,
+    String? name,
+    String? mimeType,
+    int? sizeBytes,
+    String? dataBase64,
+    String? textPreview,
+    String? url,
+    String? parsedText,
+    int? parsedCharCount,
+    String? parseStatus,
+  }) {
+    return MessageAttachment(
+      type: type ?? this.type,
+      name: name ?? this.name,
+      mimeType: mimeType ?? this.mimeType,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
+      dataBase64: dataBase64 ?? this.dataBase64,
+      textPreview: textPreview ?? this.textPreview,
+      url: url ?? this.url,
+      parsedText: parsedText ?? this.parsedText,
+      parsedCharCount: parsedCharCount ?? this.parsedCharCount,
+      parseStatus: parseStatus ?? this.parseStatus,
+    );
   }
 
   Map<String, Object?> toMap() {
@@ -44,6 +98,9 @@ class MessageAttachment {
       'data_base64': dataBase64,
       'text_preview': textPreview,
       'url': url,
+      'parsed_text': parsedText,
+      'parsed_char_count': parsedCharCount,
+      'parse_status': parseStatus,
     };
   }
 
@@ -56,6 +113,9 @@ class MessageAttachment {
       dataBase64: map['data_base64'] as String?,
       textPreview: map['text_preview'] as String?,
       url: map['url'] as String?,
+      parsedText: map['parsed_text'] as String?,
+      parsedCharCount: map['parsed_char_count'] as int?,
+      parseStatus: map['parse_status'] as String? ?? 'none',
     );
   }
 

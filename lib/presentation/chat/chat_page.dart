@@ -22,6 +22,7 @@ import '../../domain/models/conversation.dart';
 import '../../domain/models/message.dart';
 import '../../services/llm_client.dart';
 import '../../services/conversation_exporter.dart';
+import '../../services/attachment_parser.dart';
 import '../api_config/api_config_list_page.dart';
 import '../search/global_search_page.dart';
 import '../widgets/message_bubble.dart';
@@ -74,6 +75,10 @@ class ChatPage extends ConsumerStatefulWidget {
   ];
 
   /// 发送前模型多模态预检。无附件或模型未知/支持多模态时返回 null。
+  ///
+  /// v1.2.1：文件解析成功后（parseStatus == done 且含文本）不再视为
+  /// 「文件输入」——解析文本以纯文本块发送，纯文本模型可正常接收；
+  /// 图片与解析失败/未解析文件仍按原逻辑拦截。
   static String? checkAttachmentModelSupport(
       String model, List<MessageAttachment> attachments) {
     if (attachments.isEmpty) return null;
@@ -84,7 +89,7 @@ class ChatPage extends ConsumerStatefulWidget {
     if (hasImage) {
       return '当前模型不支持图片输入，请更换支持多模态的模型或移除图片后直接发送文字';
     }
-    final hasFile = attachments.any((a) => !a.isImage);
+    final hasFile = attachments.any((a) => !a.isImage && !a.hasParsedText);
     if (hasFile) {
       return '当前模型不支持文件输入，请更换支持文件/多模态的模型或移除文件后直接发送文字';
     }
@@ -448,9 +453,32 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                   border: Border.all(
                                       color: theme.colorScheme.outlineVariant),
                                 ),
-                                child: Icon(
-                                  Icons.insert_drive_file_outlined,
-                                  color: theme.colorScheme.onSurfaceVariant,
+                                // v1.2.1：文件卡显示解析状态。
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.insert_drive_file_outlined,
+                                      size: 22,
+                                      color:
+                                          theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                    if (att.parseStatus != 'none')
+                                      Text(
+                                        att.parseStatusLabel,
+                                        style: TextStyle(
+                                          fontSize: 9,
+                                          height: 1.2,
+                                          color: att.parseStatus == 'failed'
+                                              ? theme
+                                                  .colorScheme
+                                                  .error
+                                              : theme
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               ),
                             Positioned(
@@ -590,6 +618,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final hasAttachments = _pendingAttachments.isNotEmpty;
     if (text.isEmpty && !hasAttachments || _isSending) return;
     if (preset == null) _inputController.clear();
+    // v1.2.1：发送前等待仍在解析中的附件（≤3s），超时降级原样发送。
+    if (preset == null && hasAttachments) {
+      await _waitForPendingParsing();
+    }
     final attachments = preset == null
         ? List<MessageAttachment>.of(_pendingAttachments)
         : const <MessageAttachment>[];
@@ -1023,18 +1055,27 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         }
       }
       if (!mounted) return;
+      final attachment = MessageAttachment(
+        type: 'file',
+        name: file.name,
+        mimeType: file.extension?.isNotEmpty == true
+            ? 'application/${file.extension}'
+            : 'application/octet-stream',
+        sizeBytes: size,
+        dataBase64: dataBase64,
+        textPreview: preview,
+        // v1.2.1：可解析类型在 pick 后立即异步解析，其余保持 none。
+        parseStatus: AttachmentParser.isParsableName(file.name)
+            ? 'parsing'
+            : 'none',
+      );
       setState(() {
-        _pendingAttachments.add(MessageAttachment(
-          type: 'file',
-          name: file.name,
-          mimeType: file.extension?.isNotEmpty == true
-              ? 'application/${file.extension}'
-              : 'application/octet-stream',
-          sizeBytes: size,
-          dataBase64: dataBase64,
-          textPreview: preview,
-        ));
+        _pendingAttachments.add(attachment);
       });
+      // 异步解析（compute isolate，防大文件阻塞 UI）。
+      if (attachment.parseStatus == 'parsing' && path != null) {
+        _parsePendingAttachment(attachment, path);
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -1042,6 +1083,62 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           ..showSnackBar(SnackBar(content: Text('选择文件失败：$e')));
       }
     }
+  }
+
+  /// v1.2.1：pick 后异步解析附件文本（compute isolate 防卡 UI）。
+  Future<void> _parsePendingAttachment(
+      MessageAttachment attachment, String path) async {
+    try {
+      final result =
+          await AttachmentParser.parseInBackground(path, attachment.name);
+      _updatePendingAttachment(
+        attachment,
+        parsedText: result.text,
+        parsedCharCount: result.charCount,
+        parseStatus: result.parseStatus,
+      );
+    } catch (e) {
+      // compute 隔离异常（罕见）：降级为 failed，发送时原样携带文件。
+      _updatePendingAttachment(attachment, parseStatus: 'failed');
+    }
+  }
+
+  /// 更新待发附件列表中的附件字段（引用一致时原地替换触发重建）。
+  void _updatePendingAttachment(
+    MessageAttachment oldAttachment, {
+    String? parsedText,
+    int? parsedCharCount,
+    String? parseStatus,
+  }) {
+    if (!mounted) return;
+    final index = _pendingAttachments.indexOf(oldAttachment);
+    if (index < 0) return; // 已被移除，无需更新
+    setState(() {
+      _pendingAttachments[index] = oldAttachment.copyWith(
+        parsedText: parsedText,
+        parsedCharCount: parsedCharCount,
+        parseStatus: parseStatus,
+      );
+    });
+  }
+
+  /// v1.2.1：发送前等待仍在解析中的附件，超时（3s）则原样降级发送。
+  Future<void> _waitForPendingParsing() async {
+    final deadline = DateTime.now().add(const Duration(seconds: 3));
+    while (DateTime.now().isBefore(deadline)) {
+      if (!_pendingAttachments.any((a) => a.parseStatus == 'parsing')) return;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    // 超时：把仍为 parsing 的附件降级为 none（发送时原样携带文件）。
+    if (!mounted) return;
+    setState(() {
+      for (var i = 0; i < _pendingAttachments.length; i++) {
+        if (_pendingAttachments[i].parseStatus == 'parsing') {
+          _pendingAttachments[i] =
+              _pendingAttachments[i].copyWith(parseStatus: 'none');
+        }
+      }
+    });
   }
 
   /// R9：组装 OpenAI 兼容多模态 content。
@@ -1068,6 +1165,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           });
         }
       } else {
+        // v1.2.1：解析成功的文件改发纯文本块（节省 token），不再携带 file。
+        if (att.hasParsedText) {
+          final parsed = att.parsedText ?? '';
+          final header = '【文件：${att.name} 已解析内容】';
+          var body = parsed;
+          if (att.parsedCharCount != null &&
+              att.parsedCharCount! > parsed.length) {
+            body =
+                '$body\n[内容过长已截断：共 ${att.parsedCharCount} 字符，仅发送前 $parsed.length 字符]';
+          }
+          parts.add({'type': 'text', 'text': '$header\n$body'});
+          continue;
+        }
+        // 解析失败/不支持/仍在解析超时：原样携带文件。
         final data = att.dataBase64;
         if (data != null && data.isNotEmpty) {
           // OpenAI 兼容文件引用（部分网关支持 file_url）。
