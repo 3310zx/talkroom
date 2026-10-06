@@ -10,7 +10,6 @@ import '../../core/constants.dart';
 import '../../core/theme.dart';
 import '../../domain/models/api_config.dart';
 import '../../domain/models/conversation.dart';
-import '../settings/settings_page.dart';
 import 'conversation_param_page.dart';
 
 /// 宽屏三栏右侧辅助面板（平板端布局）。
@@ -174,61 +173,47 @@ class ChatDetailPanel extends ConsumerWidget {
                 ),
               ),
           ],
-          const Divider(),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: theme.colorScheme.primary,
-                    side: BorderSide(color: theme.colorScheme.primary),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                  ),
-                  icon: const Icon(Icons.tune),
-                  label: const Text('编辑会话参数'),
-                  onPressed: () async {
-                    if (selected == null) return;
-                    final changed = await Navigator.of(context).push<bool>(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            ConversationParamPage(conversation: selected),
+          if (selected != null) ...[
+            const Divider(),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: theme.colorScheme.primary,
+                      side: BorderSide(color: theme.colorScheme.primary),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
                       ),
-                    );
-                    if (changed == true) {
-                      final updated = await ref
-                          .read(appDatabaseProvider)
-                          .conversationRepository
-                          .getById(selected.id!);
-                      if (updated != null) {
-                        ref.read(selectedConversationProvider.notifier).state =
-                            updated;
-                      }
-                    }
-                  },
-                ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: theme.colorScheme.primary,
-                    side: BorderSide(color: theme.colorScheme.primary),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
                     ),
+                    icon: const Icon(Icons.tune),
+                    label: const Text('编辑会话参数'),
+                    onPressed: () async {
+                      final changed = await Navigator.of(context).push<bool>(
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              ConversationParamPage(conversation: selected),
+                        ),
+                      );
+                      if (changed == true) {
+                        final updated = await ref
+                            .read(appDatabaseProvider)
+                            .conversationRepository
+                            .getById(selected.id!);
+                        if (updated != null) {
+                          ref.read(selectedConversationProvider.notifier).state =
+                              updated;
+                        }
+                      }
+                    },
                   ),
-                  icon: const Icon(Icons.settings_outlined),
-                  label: const Text('设置'),
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const SettingsPage()),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

@@ -49,6 +49,48 @@ class ChatPage extends ConsumerStatefulWidget {
     return null;
   }
 
+  /// v1.1.2：发送前模型多模态预检。
+  ///
+  /// 命中已知纯文本模型名单且携带附件时，返回用户可见提示（与
+  /// llm_client 400 分支文案风格一致），避免「发送后等 400 才报错」；
+  /// 未命中名单的模型不打扰（由发送时 400 分支兜底）。
+  static const List<String> _knownTextOnlyModels = [
+    'gpt-3.5',
+    'text-davinci',
+    'text-curie',
+    'text-babbage',
+    'deepseek-chat',
+    'deepseek-reasoner',
+    'qwen-turbo',
+    'glm-4-flash',
+    'glm-4-air',
+    'moonshot-v1-8k',
+    'moonshot-v1-32k',
+    'moonshot-v1-128k',
+    'kimi',
+    'ernie-bot',
+    'ernie-3.5',
+    'ernie-4.0',
+  ];
+
+  /// 发送前模型多模态预检。无附件或模型未知/支持多模态时返回 null。
+  static String? checkAttachmentModelSupport(
+      String model, List<MessageAttachment> attachments) {
+    if (attachments.isEmpty) return null;
+    final lower = model.toLowerCase();
+    final isTextOnly = _knownTextOnlyModels.any((m) => lower.contains(m));
+    if (!isTextOnly) return null;
+    final hasImage = attachments.any((a) => a.isImage);
+    if (hasImage) {
+      return '当前模型不支持图片输入，请更换支持多模态的模型或移除图片后直接发送文字';
+    }
+    final hasFile = attachments.any((a) => !a.isImage);
+    if (hasFile) {
+      return '当前模型不支持文件输入，请更换支持文件/多模态的模型或移除文件后直接发送文字';
+    }
+    return null;
+  }
+
   @override
   ConsumerState<ChatPage> createState() => _ChatPageState();
 }
@@ -528,6 +570,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (preset == null) _inputController.clear();
     final attachments =
         preset == null ? List<MessageAttachment>.of(_pendingAttachments) : const <MessageAttachment>[];
+    // v1.1.2：发送前模型多模态预检 —— 命中已知纯文本模型且携带附件时
+    // 立即提示，不清空附件、不落库，避免发送后才收到 400 报错。
+    if (preset == null && attachments.isNotEmpty) {
+      final previewConv = ref.read(selectedConversationProvider);
+      final previewConfig =
+          _resolveApiConfig(ref.read(apiConfigsProvider), previewConv);
+      final previewModel = _resolveModel(previewConfig, previewConv);
+      final supportError =
+          ChatPage.checkAttachmentModelSupport(previewModel, attachments);
+      if (supportError != null) {
+        _showSnack(supportError);
+        return;
+      }
+    }
     setState(() {
       _isSending = true;
       if (preset == null) _pendingAttachments.clear();
@@ -904,7 +960,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       } else {
         data = file.bytes;
       }
-      if (data == null) return;
+      if (data == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(const SnackBar(content: Text('读取文件失败，请重试')));
+        }
+        return;
+      }
       final dataBase64 = base64Encode(data);
       // 文本类文件提取前 120 字符预览；其余跳过。
       String? preview;

@@ -6,10 +6,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:llm_chat_app/application/providers/api_configs_provider.dart';
 import 'package:llm_chat_app/application/providers/database_provider.dart';
+import 'package:llm_chat_app/application/providers/ui_state_provider.dart';
 import 'package:llm_chat_app/data/database/app_database.dart';
 import 'package:llm_chat_app/domain/models/api_config.dart';
+import 'package:llm_chat_app/domain/models/conversation.dart';
 import 'package:llm_chat_app/domain/models/message.dart';
 import 'package:llm_chat_app/domain/repositories/api_config_repository.dart';
+import 'package:llm_chat_app/presentation/chat/chat_detail_panel.dart';
 import 'package:llm_chat_app/presentation/chat/chat_page.dart';
 import 'package:llm_chat_app/services/conversation_exporter.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -312,6 +315,137 @@ void main() {
       expect(identical(narrowState,
           tester.state<State<ChatPage>>(find.byType(ChatPage))),
           isTrue);
+    });
+  });
+
+  // ── v1.1.2：发送前模型多模态预检 ──────────────────────────────
+  group('v1.1.2 模型多模态预检', () {
+    const imageAtt = MessageAttachment(
+      type: 'image',
+      name: 'a.jpg',
+      mimeType: 'image/jpeg',
+      sizeBytes: 1024,
+      dataBase64: 'AAAA',
+    );
+    const fileAtt = MessageAttachment(
+      type: 'file',
+      name: 'a.txt',
+      mimeType: 'text/plain',
+      sizeBytes: 1024,
+      dataBase64: 'AAAA',
+    );
+
+    test('无附件返回 null', () {
+      expect(
+          ChatPage.checkAttachmentModelSupport('gpt-4o', const []), isNull);
+    });
+
+    test('已知纯文本模型 + 图片 -> 提示不支持图片', () {
+      final msg =
+          ChatPage.checkAttachmentModelSupport('deepseek-chat', [imageAtt]);
+      expect(msg, isNotNull);
+      expect(msg, contains('不支持图片'));
+    });
+
+    test('已知纯文本模型 + 文件 -> 提示不支持文件', () {
+      final msg =
+          ChatPage.checkAttachmentModelSupport('gpt-3.5-turbo', [fileAtt]);
+      expect(msg, isNotNull);
+      expect(msg, contains('不支持文件'));
+    });
+
+    test('已知纯文本模型 + 图片与文件混合 -> 优先提示图片', () {
+      final msg = ChatPage.checkAttachmentModelSupport(
+          'deepseek-chat', [fileAtt, imageAtt]);
+      expect(msg, isNotNull);
+      expect(msg, contains('不支持图片'));
+    });
+
+    test('多模态模型 + 附件不拦截', () {
+      expect(
+          ChatPage.checkAttachmentModelSupport('gpt-4o', [imageAtt]), isNull);
+      expect(ChatPage.checkAttachmentModelSupport('qwen-vl-plus', [fileAtt]),
+          isNull);
+    });
+
+    test('未知模型 + 附件不打扰（由 400 兜底）', () {
+      expect(ChatPage.checkAttachmentModelSupport('my-custom-llm', [imageAtt]),
+          isNull);
+    });
+  });
+
+  // ── v1.1.2：详情面板按钮（去掉重复设置入口）────────────────────
+  group('v1.1.2 详情面板按钮', () {
+    late AppDatabase appDb;
+    late Directory tmpDir;
+
+    setUpAll(() async {
+      // 真实异步环境打开 FFI 数据库，避免 FakeAsync 下 sqflite isolate 挂起。
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+      tmpDir = Directory.systemTemp.createTempSync('llm_chat_detail_test');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(
+          const MethodChannel('plugins.flutter.io/path_provider'),
+          (call) async {
+        if (call.method == 'getApplicationSupportDirectory') {
+          return tmpDir.path;
+        }
+        return null;
+      });
+      appDb = AppDatabase.instance;
+      await appDb.open();
+    });
+
+    tearDownAll(() async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              const MethodChannel('plugins.flutter.io/path_provider'), null);
+      try {
+        await appDb.db.close();
+      } catch (_) {}
+      try {
+        tmpDir.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+
+    testWidgets('未选会话时不渲染「编辑会话参数」，也无「设置」按钮', (tester) async {
+      await tester.pumpWidget(ProviderScope(
+        overrides: [appDatabaseProvider.overrideWithValue(appDb)],
+        child: const MaterialApp(home: ChatDetailPanel()),
+      ));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('编辑会话参数'), findsNothing);
+      expect(find.text('设置'), findsNothing);
+    });
+
+    testWidgets('选中会话时显示「编辑会话参数」，且无重复「设置」按钮', (tester) async {
+      final container = ProviderContainer(overrides: [
+        appDatabaseProvider.overrideWithValue(appDb),
+      ]);
+      addTearDown(container.dispose);
+      container.read(selectedConversationProvider.notifier).state =
+          const Conversation(
+        id: 1,
+        title: '测试会话',
+        updatedAt: 1,
+        createdAt: 1,
+      );
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: ChatDetailPanel()),
+      ));
+      await tester.pump(const Duration(milliseconds: 300));
+      // 按钮位于详情 ListView 底部，懒加载需滚动到可见后再断言。
+      await tester.scrollUntilVisible(
+        find.text('编辑会话参数'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('编辑会话参数'), findsOneWidget);
+      expect(find.text('设置'), findsNothing);
     });
   });
 }

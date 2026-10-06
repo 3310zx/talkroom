@@ -20,7 +20,7 @@ import 'settings/settings_page.dart';
 ///
 /// - 宽屏（>= 840dp，平板/电脑）：左侧 NavigationRail + 双栏布局
 ///   （会话列表 | 聊天）；聊天区足够宽（>= 1100dp）时再分栏出右侧详情面板；
-///   设置页以右侧抽屉（Drawer）呈现。
+///   设置页以左侧抽屉（Drawer）呈现。
 /// - 窄屏（手机）：底部 NavigationBar 单栏 + IndexedStack 多 Tab（聊天/设置）。
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
@@ -163,19 +163,20 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   /// 宽屏（>= 840dp）：NavigationRail + 双栏布局（会话列表 | 聊天）。
-  /// 聊天区足够宽时再分栏出右侧详情面板；设置页抽屉化（右侧 Drawer）。
+  /// 聊天区足够宽时再分栏出右侧详情面板；设置页抽屉化（左侧 Drawer）。
   Widget _buildWide(BuildContext context, BoxConstraints constraints) {
     final maxWidth = constraints.maxWidth;
     final leftWidth = (maxWidth * 0.20).clamp(240.0, 320.0).toDouble();
     final rightWidth = (maxWidth * 0.22).clamp(260.0, 360.0).toDouble();
     return Scaffold(
       key: _wideScaffoldKey,
-      endDrawer: Drawer(
+      // 设置面板从左侧滑入（覆盖 NavigationRail 之上）。
+      drawer: Drawer(
         width: (maxWidth * 0.36).clamp(320.0, 440.0),
         child: const SettingsPage(),
       ),
       // M7：抽屉开合同步 NavigationRail 选中态，关闭时自动回到「聊天」。
-      onEndDrawerChanged: (isOpen) {
+      onDrawerChanged: (isOpen) {
         if (_railSettingsSelected != isOpen) {
           setState(() => _railSettingsSelected = isOpen);
         }
@@ -186,11 +187,11 @@ class _HomePageState extends ConsumerState<HomePage> {
             selectedIndex: _railSettingsSelected ? 1 : 0,
             onDestinationSelected: (index) {
               if (index == 1) {
-                // 设置页抽屉化：宽屏下从右侧滑出设置页。
+                // 设置页抽屉化：宽屏下从左侧滑出设置页。
                 setState(() => _railSettingsSelected = true);
-                _wideScaffoldKey.currentState?.openEndDrawer();
+                _wideScaffoldKey.currentState?.openDrawer();
               } else {
-                _wideScaffoldKey.currentState?.closeEndDrawer();
+                _wideScaffoldKey.currentState?.closeDrawer();
                 ref.read(mobileTabProvider.notifier).state = index;
               }
             },
