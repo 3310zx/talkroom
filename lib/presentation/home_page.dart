@@ -19,7 +19,7 @@ import 'settings/settings_page.dart';
 /// 首页：M3 自适应导航骨架。
 ///
 /// - 宽屏（>= 840dp，平板/电脑）：左侧 NavigationRail + 双栏布局
-///   （会话列表 | 聊天）；聊天区足够宽（>= 1100dp）时再分栏出右侧详情面板；
+///   （会话列表 | 聊天）；聊天区足够宽（>= 1200dp）时再分栏出右侧详情面板；
 ///   设置页以左侧抽屉（Drawer）呈现。
 /// - 窄屏（手机）：底部 NavigationBar 单栏 + IndexedStack 多 Tab（聊天/设置）。
 class HomePage extends ConsumerStatefulWidget {
@@ -95,7 +95,8 @@ class _HomePageState extends ConsumerState<HomePage> {
       final code = info['pair_code_set'] == true
           ? await service.getPairCode()
           : await service.ensurePairCode();
-      await ref.read(settingsProvider.notifier)
+      await ref
+          .read(settingsProvider.notifier)
           .set(AppConstants.settingServerLastPort, '$port');
       ref.read(localServerStatusProvider.notifier).state = LocalServerState(
         port: port,
@@ -163,16 +164,19 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   /// 宽屏（>= 840dp）：NavigationRail + 双栏布局（会话列表 | 聊天）。
-  /// 聊天区足够宽时再分栏出右侧详情面板；设置页抽屉化（左侧 Drawer）。
+  /// 聊天区足够宽（>= 1200dp，v1.2.0 M1）时再分栏出右侧详情面板；
+  /// 设置页抽屉化（左侧 Drawer）。
   Widget _buildWide(BuildContext context, BoxConstraints constraints) {
     final maxWidth = constraints.maxWidth;
-    final leftWidth = (maxWidth * 0.20).clamp(240.0, 320.0).toDouble();
-    final rightWidth = (maxWidth * 0.22).clamp(260.0, 360.0).toDouble();
+    // v1.2.0 H3：会话列表列宽对齐 M3 大屏建议（280-360dp）。
+    final leftWidth = (maxWidth * 0.20).clamp(280.0, 360.0).toDouble();
+    // v1.2.0 M1：详情面板宽度下限提升至 300，避免三栏下聊天区过窄。
+    final rightWidth = (maxWidth * 0.22).clamp(300.0, 360.0).toDouble();
     return Scaffold(
       key: _wideScaffoldKey,
-      // 设置面板从左侧滑入（覆盖 NavigationRail 之上）。
+      // 设置面板从左侧滑入（覆盖 NavigationRail 之上）；v1.2.0 L1 固定 360dp 对齐 M3。
       drawer: Drawer(
-        width: (maxWidth * 0.36).clamp(320.0, 440.0),
+        width: 360,
         child: const SettingsPage(),
       ),
       // M7：抽屉开合同步 NavigationRail 选中态，关闭时自动回到「聊天」。
@@ -183,6 +187,9 @@ class _HomePageState extends ConsumerState<HomePage> {
       },
       body: Row(
         children: [
+          // v1.2.0 M2：>=1200dp 使用扩展 rail（extended，图标+文字横排、宽度约 256dp），
+          // <1200dp 保持紧凑 rail（labelType.all）；rail 宽度由组件自身自适应，
+          // 会话列表 leftWidth 与分割线位置不受影响。
           NavigationRail(
             selectedIndex: _railSettingsSelected ? 1 : 0,
             onDestinationSelected: (index) {
@@ -195,7 +202,10 @@ class _HomePageState extends ConsumerState<HomePage> {
                 ref.read(mobileTabProvider.notifier).state = index;
               }
             },
-            labelType: NavigationRailLabelType.all,
+            extended: maxWidth >= 1200,
+            labelType: maxWidth >= 1200
+                ? NavigationRailLabelType.none
+                : NavigationRailLabelType.all,
             destinations: const [
               NavigationRailDestination(
                 icon: Icon(Icons.chat_bubble_outline),
@@ -213,13 +223,14 @@ class _HomePageState extends ConsumerState<HomePage> {
           SizedBox(width: leftWidth, child: const SessionListPage()),
           const VerticalDivider(width: 1),
           Expanded(
-            // H2：聊天区在 840/1100dp 断点互切时共享同一 GlobalKey 保活 State。
-            child: maxWidth >= 1100
+            // H2：聊天区在 840/1200dp 断点互切时共享同一 GlobalKey 保活 State。
+            child: maxWidth >= 1200
                 ? Row(
                     children: [
                       Expanded(child: ChatPage(key: _chatKeepAliveKey)),
                       const VerticalDivider(width: 1),
-                      SizedBox(width: rightWidth, child: const ChatDetailPanel()),
+                      SizedBox(
+                          width: rightWidth, child: const ChatDetailPanel()),
                     ],
                   )
                 : ChatPage(key: _chatKeepAliveKey),

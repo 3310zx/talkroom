@@ -84,9 +84,7 @@ class ChatDetailPanel extends ConsumerWidget {
                 ListTile(
                   dense: true,
                   leading: Icon(
-                    m == model
-                        ? Icons.check_circle
-                        : Icons.circle_outlined,
+                    m == model ? Icons.check_circle : Icons.circle_outlined,
                     size: 18,
                     color: m == model ? AppTheme.brandGreen : null,
                   ),
@@ -130,7 +128,8 @@ class ChatDetailPanel extends ConsumerWidget {
             ListTile(
               dense: true,
               leading: const Icon(Icons.tune, size: 20),
-              title: const Text('frequency_penalty', style: TextStyle(fontSize: 13)),
+              title: const Text('frequency_penalty',
+                  style: TextStyle(fontSize: 13)),
               trailing: Text(
                 '${selected.frequencyPenalty ?? double.tryParse(settings[AppConstants.settingFrequencyPenalty] ?? '') ?? AppConstants.defaultFrequencyPenalty}',
                 style: const TextStyle(fontSize: 13),
@@ -139,7 +138,8 @@ class ChatDetailPanel extends ConsumerWidget {
             ListTile(
               dense: true,
               leading: const Icon(Icons.tune, size: 20),
-              title: const Text('presence_penalty', style: TextStyle(fontSize: 13)),
+              title: const Text('presence_penalty',
+                  style: TextStyle(fontSize: 13)),
               trailing: Text(
                 '${selected.presencePenalty ?? double.tryParse(settings[AppConstants.settingPresencePenalty] ?? '') ?? AppConstants.defaultPresencePenalty}',
                 style: const TextStyle(fontSize: 13),
@@ -148,7 +148,8 @@ class ChatDetailPanel extends ConsumerWidget {
             ListTile(
               dense: true,
               leading: const Icon(Icons.notes_outlined, size: 20),
-              title: const Text('System Prompt', style: TextStyle(fontSize: 13)),
+              title:
+                  const Text('System Prompt', style: TextStyle(fontSize: 13)),
               subtitle: Text(
                 selected.systemPrompt ??
                     settings[AppConstants.settingSystemPrompt] ??
@@ -204,8 +205,9 @@ class ChatDetailPanel extends ConsumerWidget {
                             .conversationRepository
                             .getById(selected.id!);
                         if (updated != null) {
-                          ref.read(selectedConversationProvider.notifier).state =
-                              updated;
+                          ref
+                              .read(selectedConversationProvider.notifier)
+                              .state = updated;
                         }
                       }
                     },
@@ -230,7 +232,7 @@ class ChatDetailPanel extends ConsumerWidget {
               size: 40, color: theme.colorScheme.onSurfaceVariant),
           const SizedBox(height: 12),
           const Text(
-            '未选择会话\n选择左侧会话后展示详情',
+            '暂无选中会话\n此面板展示会话详情、模型与服务商参数',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 13),
           ),

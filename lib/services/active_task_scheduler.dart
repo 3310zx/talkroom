@@ -93,6 +93,8 @@ class ActiveTaskScheduler {
   }
 
   void _scheduleTick() {
+    // stop() 后不再重启周期调度（防测试/关闭后残留 Timer）。
+    if (!_started) return;
     _timer?.cancel();
     _timer = Timer.periodic(_tickInterval, (_) => unawaited(tick()));
   }

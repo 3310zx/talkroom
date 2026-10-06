@@ -176,9 +176,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final currentApi = _resolveApiConfig(apiConfigs, selected);
     final currentModel = _resolveModel(currentApi, selected);
     // 手机窄屏才需要会话抽屉；宽屏三栏已有左侧会话列表，不重复叠加。
-    final isNarrow = MediaQuery.of(context).size.width < 900;
+    // v1.2.0 H1：与 HomePage 840dp 宽屏断点保持一致，避免 840-899dp 平板竖屏
+    // 同时出现左侧会话列表与聊天页内会话抽屉的双入口。
+    final isNarrow = MediaQuery.of(context).size.width < 840;
 
     return Scaffold(
+      // v1.2.0 M3：显式声明键盘弹起时压缩 body（resize），配合下方 viewPadding 避让逻辑。
+      resizeToAvoidBottomInset: true,
       drawer: isNarrow ? const ChatSessionDrawer() : null,
       appBar: AppBar(
         leading: isNarrow
@@ -283,46 +287,55 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 ? _buildEmptyState(context, apiConfigs.isEmpty)
                 : messages.isEmpty
                     ? const Center(child: Text('发送第一条消息开始对话'))
-                    : ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        itemCount: messages.length,
-                        itemBuilder: (context, index) {
-                          final message = messages[index];
-                          final messageKey = message.id == null
-                              ? null
-                              : _messageKeys.putIfAbsent(
-                                  message.id!, () => GlobalKey());
-                          final bubble = MessageBubble(
-                            isUser: message.role == 'user',
-                            content: message.content,
-                            status: message.status,
-                            errorMessage: message.errorMessage,
-                            onRetry: message.role == 'assistant' &&
-                                    message.status == 'error'
-                                ? () => _retry(message)
-                                : null,
-                            reasoningContent: message.reasoningContent,
-                            reasoningDurationMs: message.reasoningDurationMs,
-                            reasoningTokens: message.reasoningTokens,
-                            attachments: message.attachments,
-                            // R3 消息操作菜单回调：
-                            // 重新生成（仅已完成的助手消息）/ 编辑（仅用户消息）/
-                            // 删除 / 引用；对应菜单项在回调为 null 时自动隐藏。
-                            onRegenerate: message.role == 'assistant' &&
-                                    message.status == 'done'
-                                ? () => _regenerate(message)
-                                : null,
-                            onEdit: message.role == 'user'
-                                ? () => _editMessage(message)
-                                : null,
-                            onDelete: () => _deleteMessage(message),
-                            onQuote: () => _quoteMessage(message),
-                          );
-                          return messageKey == null
-                              ? bubble
-                              : KeyedSubtree(key: messageKey, child: bubble);
-                        },
+                    : Center(
+                        // v1.2.0 H2：大屏聊天区限宽 760dp 居中；窄屏宽度不足时
+                        // Center 宽松约束下 ListView 自动收缩，无感知。
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 760),
+                          child: ListView.builder(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            itemCount: messages.length,
+                            itemBuilder: (context, index) {
+                              final message = messages[index];
+                              final messageKey = message.id == null
+                                  ? null
+                                  : _messageKeys.putIfAbsent(
+                                      message.id!, () => GlobalKey());
+                              final bubble = MessageBubble(
+                                isUser: message.role == 'user',
+                                content: message.content,
+                                status: message.status,
+                                errorMessage: message.errorMessage,
+                                onRetry: message.role == 'assistant' &&
+                                        message.status == 'error'
+                                    ? () => _retry(message)
+                                    : null,
+                                reasoningContent: message.reasoningContent,
+                                reasoningDurationMs:
+                                    message.reasoningDurationMs,
+                                reasoningTokens: message.reasoningTokens,
+                                attachments: message.attachments,
+                                // R3 消息操作菜单回调：
+                                // 重新生成（仅已完成的助手消息）/ 编辑（仅用户消息）/
+                                // 删除 / 引用；对应菜单项在回调为 null 时自动隐藏。
+                                onRegenerate: message.role == 'assistant' &&
+                                        message.status == 'done'
+                                    ? () => _regenerate(message)
+                                    : null,
+                                onEdit: message.role == 'user'
+                                    ? () => _editMessage(message)
+                                    : null,
+                                onDelete: () => _deleteMessage(message),
+                                onQuote: () => _quoteMessage(message),
+                              );
+                              return messageKey == null
+                                  ? bubble
+                                  : KeyedSubtree(
+                                      key: messageKey, child: bubble);
+                            },
+                          ),
+                        ),
                       ),
           ),
           _buildInputBar(context),
@@ -346,9 +359,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             ),
             const SizedBox(height: 12),
             Text(
-              hasApi
-                  ? '选择会话开始聊天\n也可以直接输入消息，将自动新建会话'
-                  : '尚未添加 API 配置',
+              hasApi ? '选择会话开始聊天\n也可以直接输入消息，将自动新建会话' : '尚未添加 API 配置',
               textAlign: TextAlign.center,
             ),
             if (!hasApi) ...[
@@ -382,182 +393,193 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final quote = _quoteContent;
     // Android 15+ edge-to-edge 下 MediaQuery.padding 为 0，SafeArea 失效；
     // 改用 viewPadding 手动避让平板底部系统导航栏，键盘弹起时不受影响。
-    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(12, 4, 12, 8 + bottomInset),
-      child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // R9：待发送附件预览条（缩略图/文件卡片，可删除）。
-            if (_pendingAttachments.isNotEmpty)
-              Container(
-                margin: const EdgeInsets.only(bottom: 4),
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: SizedBox(
-                  height: 56,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: _pendingAttachments.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 6),
-                    itemBuilder: (context, index) {
-                      final att = _pendingAttachments[index];
-                      return Stack(
-                        children: [
-                          if (att.isImage && att.dataBase64 != null)
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(6),
-                              child: Image.memory(
-                                base64Decode(att.dataBase64!),
+    // v1.2.0 M3：Scaffold 已 resize 压缩 body，键盘弹起时不再叠加导航栏避让
+    // （导航栏此时已被键盘覆盖），避免输入栏与键盘之间出现多余空隙。
+    final viewInsetsBottom = MediaQuery.viewInsetsOf(context).bottom;
+    final bottomInset =
+        viewInsetsBottom > 0 ? 0 : MediaQuery.viewPaddingOf(context).bottom;
+    // v1.2.0 H2：输入栏与消息列表同样限宽 760dp 居中，大屏不贴边拉伸。
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(12, 4, 12, 8.0 + bottomInset),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // R9：待发送附件预览条（缩略图/文件卡片，可删除）。
+              if (_pendingAttachments.isNotEmpty)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 4),
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: SizedBox(
+                    height: 56,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: _pendingAttachments.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 6),
+                      itemBuilder: (context, index) {
+                        final att = _pendingAttachments[index];
+                        return Stack(
+                          children: [
+                            if (att.isImage && att.dataBase64 != null)
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: Image.memory(
+                                  base64Decode(att.dataBase64!),
+                                  width: 48,
+                                  height: 48,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) =>
+                                      const Icon(Icons.image_outlined),
+                                ),
+                              )
+                            else
+                              Container(
                                 width: 48,
                                 height: 48,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) =>
-                                    const Icon(Icons.image_outlined),
-                              ),
-                            )
-                          else
-                            Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.surface,
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                    color: theme.colorScheme.outlineVariant),
-                              ),
-                              child: Icon(
-                                Icons.insert_drive_file_outlined,
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          Positioned(
-                            top: -6,
-                            right: -6,
-                            child: InkWell(
-                              onTap: () => setState(
-                                  () => _pendingAttachments.removeAt(index)),
-                              child: Container(
-                                padding: const EdgeInsets.all(2),
                                 decoration: BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurfaceVariant,
-                                  shape: BoxShape.circle,
+                                  color: theme.colorScheme.surface,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                      color: theme.colorScheme.outlineVariant),
                                 ),
-                                child: Icon(Icons.close,
-                                    size: 12,
-                                    // L2：颜色收敛到主题 onPrimary，移除硬编码白。
+                                child: Icon(
+                                  Icons.insert_drive_file_outlined,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            Positioned(
+                              top: -6,
+                              right: -6,
+                              child: InkWell(
+                                onTap: () => setState(
+                                    () => _pendingAttachments.removeAt(index)),
+                                child: Container(
+                                  padding: const EdgeInsets.all(2),
+                                  decoration: BoxDecoration(
                                     color: Theme.of(context)
                                         .colorScheme
-                                        .onPrimary),
+                                        .onSurfaceVariant,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(Icons.close,
+                                      size: 12,
+                                      // L2：颜色收敛到主题 onPrimary，移除硬编码白。
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onPrimary),
+                                ),
                               ),
                             ),
-                          ),
-                        ],
-                      );
-                    },
+                          ],
+                        );
+                      },
+                    ),
                   ),
                 ),
-              ),
-            // 引用预览条（R3）：引用内容带入输入框时展示，可一键取消。
-            if (quote != null && quote.trim().isNotEmpty)
-              Container(
-                margin: const EdgeInsets.only(bottom: 4),
-                padding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.format_quote,
-                      size: 16,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        _quotePreview(quote),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                          fontStyle: FontStyle.italic,
+              // 引用预览条（R3）：引用内容带入输入框时展示，可一键取消。
+              if (quote != null && quote.trim().isNotEmpty)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 4),
+                  padding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.format_quote,
+                        size: 16,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _quotePreview(quote),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                            fontStyle: FontStyle.italic,
+                          ),
                         ),
                       ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 16),
-                      tooltip: '取消引用',
-                      color: theme.colorScheme.onSurfaceVariant,
-                      onPressed: () => setState(() => _quoteContent = null),
-                    ),
-                  ],
-                ),
-              ),
-            Row(
-              children: [
-                // R9：附件入口（相册图片 / 文件选择器）。
-                IconButton(
-                  onPressed: _showAttachmentMenu,
-                  icon: const Icon(Icons.add_circle_outline),
-                  tooltip: '添加图片或文件',
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: TextField(
-                    controller: _inputController,
-                    // R6 多行输入：自动增高，最大约 6 行，发送后重置高度。
-                    minLines: 1,
-                    maxLines: 6,
-                    textInputAction: TextInputAction.newline,
-                    onSubmitted: (_) {
-                      if (!_isSending) _send();
-                    },
-                    decoration: const InputDecoration(
-                      hintText: '输入消息…',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 16),
+                        tooltip: '取消引用',
+                        color: theme.colorScheme.onSurfaceVariant,
+                        onPressed: () => setState(() => _quoteContent = null),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 4),
-                // R8：语音输入按钮。设备/权限不可用时隐藏，不崩溃。
-                if (_speechAvailable)
+              Row(
+                children: [
+                  // R9：附件入口（相册图片 / 文件选择器）。
                   IconButton(
-                    onPressed: _isListening ? _stopListening : _startListening,
-                    icon: Icon(
-                      _isListening ? Icons.graphic_eq : Icons.mic_none,
-                      color: _isListening
-                          ? theme.colorScheme.error
-                          : theme.colorScheme.onSurfaceVariant,
+                    onPressed: _showAttachmentMenu,
+                    icon: const Icon(Icons.add_circle_outline),
+                    tooltip: '添加图片或文件',
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: TextField(
+                      controller: _inputController,
+                      // R6 多行输入：自动增高，最大约 6 行，发送后重置高度。
+                      minLines: 1,
+                      maxLines: 6,
+                      textInputAction: TextInputAction.newline,
+                      onSubmitted: (_) {
+                        if (!_isSending) _send();
+                      },
+                      decoration: const InputDecoration(
+                        hintText: '输入消息…',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
                     ),
-                    tooltip: _isListening ? '结束语音输入' : '语音输入',
                   ),
-                const SizedBox(width: 4),
-                // R7 停止生成：生成过程中发送按钮变为「停止」按钮，可中断 SSE。
-                if (_isSending)
-                  IconButton.filled(
-                    onPressed: _stop,
-                    icon: const Icon(Icons.stop),
-                    tooltip: '停止生成',
-                  )
-                else
-                  IconButton.filled(
-                    onPressed: _send,
-                    icon: const Icon(Icons.send),
-                    tooltip: '发送',
-                  ),
-              ],
-            ),
-          ],
+                  const SizedBox(width: 4),
+                  // R8：语音输入按钮。设备/权限不可用时隐藏，不崩溃。
+                  if (_speechAvailable)
+                    IconButton(
+                      onPressed:
+                          _isListening ? _stopListening : _startListening,
+                      icon: Icon(
+                        _isListening ? Icons.graphic_eq : Icons.mic_none,
+                        color: _isListening
+                            ? theme.colorScheme.error
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                      tooltip: _isListening ? '结束语音输入' : '语音输入',
+                    ),
+                  const SizedBox(width: 4),
+                  // R7 停止生成：生成过程中发送按钮变为「停止」按钮，可中断 SSE。
+                  if (_isSending)
+                    IconButton.filled(
+                      onPressed: _stop,
+                      icon: const Icon(Icons.stop),
+                      tooltip: '停止生成',
+                    )
+                  else
+                    IconButton.filled(
+                      onPressed: _send,
+                      icon: const Icon(Icons.send),
+                      tooltip: '发送',
+                    ),
+                ],
+              ),
+            ],
+          ),
         ),
+      ),
     );
   }
 
@@ -568,8 +590,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final hasAttachments = _pendingAttachments.isNotEmpty;
     if (text.isEmpty && !hasAttachments || _isSending) return;
     if (preset == null) _inputController.clear();
-    final attachments =
-        preset == null ? List<MessageAttachment>.of(_pendingAttachments) : const <MessageAttachment>[];
+    final attachments = preset == null
+        ? List<MessageAttachment>.of(_pendingAttachments)
+        : const <MessageAttachment>[];
     // v1.1.2：发送前模型多模态预检 —— 命中已知纯文本模型且携带附件时
     // 立即提示，不清空附件、不落库，避免发送后才收到 400 报错。
     if (preset == null && attachments.isNotEmpty) {
@@ -646,20 +669,22 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       //    R13：会话设置了默认模板时，模板内容作为 system prompt（优先于全局设置）。
       final settings = ref.read(settingsProvider);
       final temperature = conv.temperature ??
-          _doubleSetting(
-              settings, AppConstants.settingTemperature, AppConstants.defaultTemperature);
+          _doubleSetting(settings, AppConstants.settingTemperature,
+              AppConstants.defaultTemperature);
       final maxTokens = conv.maxTokens ??
-          _intSetting(
-              settings, AppConstants.settingMaxTokens, AppConstants.defaultMaxTokens);
+          _intSetting(settings, AppConstants.settingMaxTokens,
+              AppConstants.defaultMaxTokens);
       final topP = conv.topP ??
-          _doubleSetting(settings, AppConstants.settingTopP, AppConstants.defaultTopP);
+          _doubleSetting(
+              settings, AppConstants.settingTopP, AppConstants.defaultTopP);
       final frequencyPenalty = conv.frequencyPenalty ??
-          _doubleSetting(
-              settings, AppConstants.settingFrequencyPenalty, AppConstants.defaultFrequencyPenalty);
+          _doubleSetting(settings, AppConstants.settingFrequencyPenalty,
+              AppConstants.defaultFrequencyPenalty);
       final presencePenalty = conv.presencePenalty ??
-          _doubleSetting(
-              settings, AppConstants.settingPresencePenalty, AppConstants.defaultPresencePenalty);
-      var systemPrompt = conv.systemPrompt ?? settings[AppConstants.settingSystemPrompt];
+          _doubleSetting(settings, AppConstants.settingPresencePenalty,
+              AppConstants.defaultPresencePenalty);
+      var systemPrompt =
+          conv.systemPrompt ?? settings[AppConstants.settingSystemPrompt];
       if (conv.promptTemplateId != null) {
         final template = await ref
             .read(appDatabaseProvider)
@@ -728,20 +753,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       final messagesNotifier =
           _messagesNotifier ?? ref.read(messagesProvider.notifier);
       await messagesNotifier!.update(ChatMessage(
-            id: assistantId,
-            conversationId: conversationId,
-            role: 'assistant',
-            content: result.content,
-            status: 'done',
-            modelId: model,
-            promptTokens: result.promptTokens,
-            completionTokens: result.completionTokens,
-            reasoningContent: result.reasoningContent,
-            reasoningDurationMs: result.reasoningDurationMs,
-            reasoningTokens: result.reasoningTokens,
-            cachedTokens: result.cachedTokens,
-            createdAt: now + 1,
-          ));
+        id: assistantId,
+        conversationId: conversationId,
+        role: 'assistant',
+        content: result.content,
+        status: 'done',
+        modelId: model,
+        promptTokens: result.promptTokens,
+        completionTokens: result.completionTokens,
+        reasoningContent: result.reasoningContent,
+        reasoningDurationMs: result.reasoningDurationMs,
+        reasoningTokens: result.reasoningTokens,
+        cachedTokens: result.cachedTokens,
+        createdAt: now + 1,
+      ));
       if (result.cachedTokens != null || result.promptTokens != null) {
         await ref
             .read(appDatabaseProvider)
@@ -811,9 +836,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           final recognized = result.recognizedWords.trim();
           if (recognized.isEmpty) return;
           final current = _inputController.text.trim();
-          _inputController.text = current.isEmpty
-              ? recognized
-              : '$current $recognized';
+          _inputController.text =
+              current.isEmpty ? recognized : '$current $recognized';
           _inputController.selection = TextSelection.collapsed(
             offset: _inputController.text.length,
           );
@@ -1038,7 +1062,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         if (data != null && data.isNotEmpty) {
           parts.add({
             'type': 'image_url',
-            'image_url': {'url': 'data:${att.mimeType ?? 'image/jpeg'};base64,$data'},
+            'image_url': {
+              'url': 'data:${att.mimeType ?? 'image/jpeg'};base64,$data'
+            },
           });
         }
       } else {
@@ -1049,7 +1075,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             'type': 'file',
             'file': {
               'file_name': att.name,
-              'file_data': 'data:${att.mimeType ?? 'application/octet-stream'};base64,$data',
+              'file_data':
+                  'data:${att.mimeType ?? 'application/octet-stream'};base64,$data',
             },
           });
         }
@@ -1093,8 +1120,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (current == null) return;
     // H1：统一用 initState 缓存的 Notifier 落库，不依赖 ref/mounted。
     final notifier = _messagesNotifier ?? ref.read(messagesProvider.notifier);
-    await notifier!.update(
-        current.copyWith(status: status, errorMessage: errorMessage));
+    await notifier!
+        .update(current.copyWith(status: status, errorMessage: errorMessage));
     if (conv != null) {
       await _updateConversationMeta(
         conv.id!,
@@ -1229,7 +1256,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   ///
   /// H1：使用 initState 缓存的 Notifier（dispose 后 ref 不可用），
   /// 保证发送中离开页面时终态元数据仍能落库。
-  Future<void> _updateConversationMeta(int convId, String summary, int now) async {
+  Future<void> _updateConversationMeta(
+      int convId, String summary, int now) async {
     Conversation? conv;
     final convs = _conversationsNotifier?.snapshot ?? const <Conversation>[];
     for (final c in convs) {
@@ -1239,8 +1267,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       }
     }
     if (conv == null) return;
-    final notifier = _conversationsNotifier ??
-        ref.read(conversationsProvider.notifier);
+    final notifier =
+        _conversationsNotifier ?? ref.read(conversationsProvider.notifier);
     await notifier!.update(conv.copyWith(lastMessage: summary, updatedAt: now));
   }
 
@@ -1309,10 +1337,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
               child: Text(
                 api.name,
-                style: Theme.of(sheetContext)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: Theme.of(sheetContext).colorScheme.onSurfaceVariant),
+                style: Theme.of(sheetContext).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(sheetContext).colorScheme.onSurfaceVariant),
               ),
             ),
             Flexible(
@@ -1397,7 +1423,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   onPressed: () {
                     Navigator.of(sheetContext).pop();
                     Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const ApiConfigListPage()),
+                      MaterialPageRoute(
+                          builder: (_) => const ApiConfigListPage()),
                     );
                   },
                   child: const Text('去配置'),
@@ -1422,7 +1449,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     return '${api.name} · $model';
   }
 
-  double _doubleSetting(Map<String, String> settings, String key, double fallback) {
+  double _doubleSetting(
+      Map<String, String> settings, String key, double fallback) {
     final v = settings[key];
     if (v == null) return fallback;
     return double.tryParse(v) ?? fallback;
