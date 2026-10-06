@@ -42,34 +42,102 @@ class ApiConfigsNotifier extends StateNotifier<List<ApiConfig>> {
   /// 先 insert 拿到真实 id，再以 `api_key:<id>` 为引用键写入安全存储并回填，
   /// 避免占位引用键与实际密钥错位。本地免密钥服务（如 Ollama）允许
   /// [apiKey] 为空：仅落库、不写安全存储。
+  ///
+  /// M2：全程 try/catch，任一步失败即执行事务补偿 —— 回滚已插入的数据库记录
+  /// 与已写入的密钥，绝不留下"有记录无密钥 / 有密钥无记录"的半成品。
   Future<void> add(ApiConfig config, String apiKey) async {
     final now = DateTime.now().millisecondsSinceEpoch;
-    final id = await _repository.insert(
-      config.copyWith(createdAt: now, updatedAt: now),
-    );
-    final refKey = ApiKeyStore.refKeyFor(id);
-    if (apiKey.isNotEmpty) {
-      await ApiKeyStore.write(refKey, apiKey);
+    var insertedId = -1;
+    var keyWritten = false;
+    try {
+      insertedId = await _repository.insert(
+        config.copyWith(createdAt: now, updatedAt: now),
+      );
+      final refKey = ApiKeyStore.refKeyFor(insertedId);
+      if (apiKey.isNotEmpty) {
+        await ApiKeyStore.write(refKey, apiKey);
+        keyWritten = true;
+      }
+      await _repository.update(
+        config.copyWith(
+            id: insertedId, apiKeyRef: refKey, createdAt: now, updatedAt: now),
+      );
+      await load();
+    } catch (e, st) {
+      debugPrint('ApiConfigsNotifier.add failed: $e\n$st');
+      await _rollbackInsert(insertedId, keyWritten);
+      rethrow;
     }
-    await _repository.update(
-      config.copyWith(id: id, apiKeyRef: refKey, createdAt: now, updatedAt: now),
-    );
-    await load();
+  }
+
+  /// M2：新增配置失败时的事务补偿 —— 删除已插入的记录与已写入的密钥。
+  Future<void> _rollbackInsert(int id, bool keyWritten) async {
+    if (id < 0) return;
+    try {
+      if (keyWritten) {
+        await ApiKeyStore.delete(ApiKeyStore.refKeyFor(id));
+      }
+      await _repository.delete(id);
+      await load();
+    } catch (e, st) {
+      debugPrint('ApiConfigsNotifier rollback failed: $e\n$st');
+    }
   }
 
   /// 更新配置；[apiKey] 非空时同时更新安全存储。
+  ///
+  /// M2：写入新密钥前先缓存旧值，若数据库更新失败则尽力恢复旧密钥，
+  /// 避免安全存储与数据库指向不一致；失败统一记录并向上抛出。
   Future<void> update(ApiConfig config, {String? apiKey}) async {
-    if (apiKey != null && apiKey.isNotEmpty) {
-      await ApiKeyStore.write(config.apiKeyRef, apiKey);
+    final hadKeyWrite = apiKey != null && apiKey.isNotEmpty;
+    var previousKey = '';
+    try {
+      if (hadKeyWrite) {
+        previousKey = await ApiKeyStore.read(config.apiKeyRef) ?? '';
+        await ApiKeyStore.write(config.apiKeyRef, apiKey);
+      }
+      await _repository.update(
+        config.copyWith(updatedAt: DateTime.now().millisecondsSinceEpoch),
+      );
+      await load();
+    } catch (e, st) {
+      debugPrint('ApiConfigsNotifier.update failed: $e\n$st');
+      if (hadKeyWrite) {
+        try {
+          if (previousKey.isEmpty) {
+            await ApiKeyStore.delete(config.apiKeyRef);
+          } else {
+            await ApiKeyStore.write(config.apiKeyRef, previousKey);
+          }
+        } catch (rollbackErr, rollbackSt) {
+          debugPrint(
+              'ApiConfigsNotifier.update rollback failed: $rollbackErr\n$rollbackSt');
+        }
+      }
+      rethrow;
     }
-    await _repository.update(config.copyWith(updatedAt: DateTime.now().millisecondsSinceEpoch));
-    await load();
   }
 
   /// 删除配置（同时清理安全存储中的密钥）。
+  ///
+  /// M2：先删数据库记录、再删密钥，避免"记录在但密钥已丢"；密钥清理失败
+  /// 重试一次，仍失败仅记录（孤儿密钥无业务影响），不会中断删除流程。
   Future<void> remove(ApiConfig config) async {
-    await _repository.delete(config.id!);
-    await ApiKeyStore.delete(config.apiKeyRef);
-    await load();
+    try {
+      await _repository.delete(config.id!);
+      try {
+        await ApiKeyStore.delete(config.apiKeyRef);
+      } catch (keyErr, keySt) {
+        debugPrint(
+            'ApiConfigsNotifier.remove key delete failed: $keyErr\n$keySt');
+        try {
+          await ApiKeyStore.delete(config.apiKeyRef);
+        } catch (_) {}
+      }
+      await load();
+    } catch (e, st) {
+      debugPrint('ApiConfigsNotifier.remove failed: $e\n$st');
+      rethrow;
+    }
   }
 }

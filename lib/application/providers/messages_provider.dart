@@ -15,6 +15,10 @@ class MessagesNotifier extends StateNotifier<List<ChatMessage>> {
 
   final MessageRepository _repository;
 
+  /// 公开只读快照（H1：页面 dispose 后通过缓存的 Notifier 读取当前状态，
+  /// 避免直接访问受保护的 state 成员）。
+  List<ChatMessage> get snapshot => state;
+
   Future<void> loadForConversation(int conversationId) async {
     state = await _repository.listByConversation(conversationId);
   }

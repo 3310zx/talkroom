@@ -130,6 +130,11 @@ class LlmClient {
             'Authorization': 'Bearer $apiKey',
             'Accept': 'text/event-stream',
           },
+          // M4：流式长生成不设读超时 —— SSE 长输出若仍按固定 60s
+          // receiveTimeout 会在模型边生成边吐字时被中途截断。
+          // 网络层仍受 connectTimeout / sendTimeout 保护，且响应建立后
+          // 字节流本身持续产出即视为活跃。
+          receiveTimeout: null,
         ),
         cancelToken: cancelToken,
       );

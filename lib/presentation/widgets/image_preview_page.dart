@@ -21,11 +21,41 @@ class ImagePreviewPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    ImageProvider? provider;
+    // M5：按数据来源分支构造 Image；cacheWidth 仅存在专有构造上，
+    // 统一按屏幕宽度降采样解码，避免全尺寸解码超大图 OOM。
+    final Widget? imageWidget;
     if (base64Data != null && base64Data!.isNotEmpty) {
-      provider = MemoryImage(base64Decode(base64Data!));
+      imageWidget = Image.memory(
+        base64Decode(base64Data!),
+        fit: BoxFit.contain,
+        cacheWidth: _decodeTargetWidth(context),
+        errorBuilder: (_, __, ___) => const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.broken_image_outlined,
+                color: Colors.white54, size: 56),
+            SizedBox(height: 12),
+            Text('图片加载失败', style: TextStyle(color: Colors.white70)),
+          ],
+        ),
+      );
     } else if (url != null && url!.isNotEmpty) {
-      provider = NetworkImage(url!);
+      imageWidget = Image.network(
+        url!,
+        fit: BoxFit.contain,
+        cacheWidth: _decodeTargetWidth(context),
+        errorBuilder: (_, __, ___) => const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.broken_image_outlined,
+                color: Colors.white54, size: 56),
+            SizedBox(height: 12),
+            Text('图片加载失败', style: TextStyle(color: Colors.white70)),
+          ],
+        ),
+      );
+    } else {
+      imageWidget = null;
     }
 
     return Scaffold(
@@ -51,7 +81,7 @@ class ImagePreviewPage extends StatelessWidget {
         // 点击空白区域关闭（R5：全屏可关闭）。
         onTap: () => Navigator.of(context).pop(),
         child: Center(
-          child: provider == null
+          child: imageWidget == null
               ? const Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -61,24 +91,17 @@ class ImagePreviewPage extends StatelessWidget {
                     Text('图片无法加载', style: TextStyle(color: Colors.white70)),
                   ],
                 )
-              : InteractiveViewer(
-                  maxScale: 6,
-                  child: Image(
-                    image: provider,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => const Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.broken_image_outlined,
-                            color: Colors.white54, size: 56),
-                        SizedBox(height: 12),
-                        Text('图片加载失败', style: TextStyle(color: Colors.white70)),
-                      ],
-                    ),
-                  ),
-                ),
+              : InteractiveViewer(maxScale: 6, child: imageWidget),
         ),
       ),
     );
+  }
+
+  /// M5：解码目标宽度 = 屏幕物理像素宽，作为 Image 降采样上限。
+  /// 超过该宽度的原图在解码阶段即被缩小，内存占用大幅下降。
+  int _decodeTargetWidth(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    return (size.width * dpr).round().clamp(512, 4096);
   }
 }

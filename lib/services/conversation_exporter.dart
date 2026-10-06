@@ -29,7 +29,7 @@ class ConversationExporter {
 
   static const List<String> kFormats = ['markdown', 'text', 'pdf'];
 
-  /// 导出规模防护上限：消息条数。
+  /// 导出规模防护上限：消息条数（M6 起用于分卷粒度，超限自动分卷）。
   static const int kMaxMessages = 3000;
 
   /// 导出规模防护上限：总文本字符数（30MB，粗略按 1 字符 = 1 字节估算）。
@@ -84,10 +84,12 @@ class ConversationExporter {
 
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final file = await _buildFile(conversation, messages, format);
+      // M6：超过规模上限时自动分卷导出，不再抛异常拒绝。
+      final files = await _buildFiles(conversation, messages, format);
+      final volumeSuffix = files.length > 1 ? '（${files.length} 卷）' : '';
       await Share.shareXFiles(
-        [XFile(file.path)],
-        subject: '会话导出：${conversation.title}',
+        files.map((f) => XFile(f.path)).toList(),
+        subject: '会话导出：${conversation.title}$volumeSuffix',
         text: '来自 LLM Chat 的会话导出',
       );
     } catch (e) {
@@ -95,70 +97,98 @@ class ConversationExporter {
     }
   }
 
-  static Future<File> _buildFile(
+  /// M6：按规模上限把消息拆成若干卷，每卷消息数 ≤ [kMaxMessages] 且
+  /// 总字符数 ≤ [kMaxTotalChars]。未超限时返回单卷。
+  ///
+  /// 边界规则：单条消息自身超过字符上限时仍单独成卷（宁可超限也不丢弃）；
+  /// 拆分只按「消息」粒度进行，不会截断单条消息内容。
+  static List<List<ChatMessage>> chunkMessages(List<ChatMessage> messages) {
+    if (messages.length <= kMaxMessages &&
+        _estimateChars(messages) <= kMaxTotalChars) {
+      return [messages];
+    }
+    final chunks = <List<ChatMessage>>[];
+    var current = <ChatMessage>[];
+    var currentChars = 0;
+    for (final message in messages) {
+      final messageChars = _messageChars(message);
+      if (current.isNotEmpty &&
+          (current.length >= kMaxMessages ||
+              currentChars + messageChars > kMaxTotalChars)) {
+        chunks.add(current);
+        current = <ChatMessage>[];
+        currentChars = 0;
+      }
+      current.add(message);
+      currentChars += messageChars;
+    }
+    if (current.isNotEmpty) chunks.add(current);
+    return chunks;
+  }
+
+  static int _messageChars(ChatMessage message) {
+    var total = message.content.length;
+    for (final attachment in message.attachments) {
+      total += attachment.name.length;
+    }
+    return total;
+  }
+
+  static int _estimateChars(List<ChatMessage> messages) {
+    var total = 0;
+    for (final message in messages) {
+      total += _messageChars(message);
+      if (total > kMaxTotalChars) break;
+    }
+    return total;
+  }
+
+  static Future<List<File>> _buildFiles(
     Conversation conversation,
     List<ChatMessage> messages,
     String format,
   ) async {
-    _checkScale(messages);
+    final chunks = chunkMessages(messages);
     final dir = await getTemporaryDirectory();
     final safeTitle = _sanitize(conversation.title.isEmpty
         ? '未命名会话'
         : conversation.title);
     final base = '${safeTitle}_${DateTime.now().millisecondsSinceEpoch}';
-    switch (format) {
-      case 'markdown':
-        final file = File('${dir.path}/$base.md');
-        final sink = file.openWrite();
-        try {
-          await _writeMarkdown(sink, conversation, messages);
-          await sink.flush();
-        } finally {
-          await sink.close();
-        }
-        return file;
-      case 'text':
-        final file = File('${dir.path}/$base.txt');
-        final sink = file.openWrite();
-        try {
-          await _writePlainText(sink, conversation, messages);
-          await sink.flush();
-        } finally {
-          await sink.close();
-        }
-        return file;
-      case 'pdf':
-        final file = File('${dir.path}/$base.pdf');
-        final bytes = await _buildPdfBytes(conversation, messages);
-        await file.writeAsBytes(bytes);
-        return file;
-      default:
-        throw ArgumentError('未知导出格式：$format');
-    }
-  }
-
-  /// 规模防护：导出前估算消息条数与总文本长度，超限直接抛出明确异常。
-  static void _checkScale(List<ChatMessage> messages) {
-    if (messages.length > kMaxMessages) {
-      throw Exception(
-        '会话过大，请先精简会话或改用分页导出'
-        '（消息数 ${messages.length} 超过 $kMaxMessages 条上限）',
-      );
-    }
-    var total = 0;
-    for (final message in messages) {
-      total += message.content.length;
-      for (final attachment in message.attachments) {
-        total += attachment.name.length;
+    final files = <File>[];
+    for (var i = 0; i < chunks.length; i++) {
+      final volume = chunks.length == 1 ? '' : '_第${i + 1}卷';
+      final chunk = chunks[i];
+      switch (format) {
+        case 'markdown':
+          final file = File('${dir.path}/$base$volume.md');
+          final sink = file.openWrite();
+          try {
+            await _writeMarkdown(sink, conversation, chunk);
+            await sink.flush();
+          } finally {
+            await sink.close();
+          }
+          files.add(file);
+        case 'text':
+          final file = File('${dir.path}/$base$volume.txt');
+          final sink = file.openWrite();
+          try {
+            await _writePlainText(sink, conversation, chunk);
+            await sink.flush();
+          } finally {
+            await sink.close();
+          }
+          files.add(file);
+        case 'pdf':
+          final file = File('${dir.path}/$base$volume.pdf');
+          final bytes = await _buildPdfBytes(conversation, chunk);
+          await file.writeAsBytes(bytes);
+          files.add(file);
+        default:
+          throw ArgumentError('未知导出格式：$format');
       }
-      if (total > kMaxTotalChars) break;
     }
-    if (total > kMaxTotalChars) {
-      throw Exception(
-        '会话过大，请先精简会话或改用分页导出'
-        '（总文本超过 ${kMaxTotalChars ~/ (1024 * 1024)}MB 上限）',
-      );
-    }
+    return files;
   }
 
   /// Markdown 导出：标题 + 消息列表（角色、时间、正文），流式写入。

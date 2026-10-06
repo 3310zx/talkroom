@@ -36,6 +36,19 @@ import 'conversation_param_page.dart';
 class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({super.key});
 
+  /// M3：附件大小上限（20MB），与文件选择器联动做发送前预检。
+  static const int kMaxAttachmentBytes = 20 * 1024 * 1024;
+
+  /// M3：附件大小预检。超过上限时返回错误文案（用户可见），否则返回 null。
+  static String? checkAttachmentSize(int sizeBytes) {
+    if (sizeBytes <= 0) return null;
+    if (sizeBytes > kMaxAttachmentBytes) {
+      final mb = sizeBytes / (1024 * 1024);
+      return '附件 ${mb.toStringAsFixed(1)}MB 超过 20MB 上限，已拒绝发送';
+    }
+    return null;
+  }
+
   @override
   ConsumerState<ChatPage> createState() => _ChatPageState();
 }
@@ -49,6 +62,15 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   CancelToken? _cancelToken;
   bool _isSending = false;
   int? _currentAssistantId;
+
+  /// 自动滚动节流：两次自动滚动的间隔下限（L6，避免高频动画卡顿）。
+  static const Duration _autoScrollThrottle = Duration(milliseconds: 120);
+  DateTime _lastAutoScrollAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// 缓存 Notifier 引用，供 H1 在 dispose 后异步终态落库使用
+  /// （ref 在 dispose 后不可再用）。
+  MessagesNotifier? _messagesNotifier;
+  ConversationsNotifier? _conversationsNotifier;
 
   /// R3「引用」：被引用消息的原文（输入框上方展示引用预览条，可取消）。
   String? _quoteContent;
@@ -69,15 +91,25 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   @override
   void initState() {
     super.initState();
+    // H1：缓存 Notifier，dispose 后异步落库不再依赖 ref/mounted。
+    _messagesNotifier = ref.read(messagesProvider.notifier);
+    _conversationsNotifier = ref.read(conversationsProvider.notifier);
     // R8：异步探测语音能力（设备/权限不可用时隐藏按钮，不崩溃）。
     _initSpeech();
   }
 
   @override
   void dispose() {
+    // H1：主动取消进行中的流式请求，避免 dispose 后回调触发 setState。
+    _cancelToken?.cancel();
+    _cancelToken = null;
     _inputController.dispose();
     _scrollController.dispose();
-    _speech.cancel();
+    try {
+      _speech.cancel();
+    } catch (_) {
+      // L1：语音取消不抛出未捕获异常。
+    }
     super.dispose();
   }
 
@@ -374,8 +406,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                       .onSurfaceVariant,
                                   shape: BoxShape.circle,
                                 ),
-                                child: const Icon(Icons.close,
-                                    size: 12, color: Colors.white),
+                                child: Icon(Icons.close,
+                                    size: 12,
+                                    // L2：颜色收敛到主题 onPrimary，移除硬编码白。
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onPrimary),
                               ),
                             ),
                           ),
@@ -612,16 +648,15 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         model: model,
         messages: llmMessages,
         onDelta: (delta) {
-          ref.read(messagesProvider.notifier)
-              .appendStreamingFragment(assistantId, delta);
-          _scrollToBottom();
+          // H1：使用 initState 缓存的 Notifier，dispose 后不依赖 ref。
+          _messagesNotifier?.appendStreamingFragment(assistantId, delta);
+          _scrollToBottomThrottled();
         },
         onReasoningDelta: (delta) {
           // 思维链增量实时累积到消息的 reasoningContent（与正文分离），
           // 使生成过程中即可看到「思考过程」折叠卡片。
-          ref.read(messagesProvider.notifier)
-              .appendReasoningFragment(assistantId, delta);
-          _scrollToBottom();
+          _messagesNotifier?.appendReasoningFragment(assistantId, delta);
+          _scrollToBottomThrottled();
         },
         cancelToken: _cancelToken,
         temperature: temperature,
@@ -633,7 +668,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
       // 8) 完成态落库并刷新会话摘要；同时将缓存命中写入独立记录表
       // （设置页「命中缓存」数据源，与聊天历史解耦可单独清空）。
-      await ref.read(messagesProvider.notifier).update(ChatMessage(
+      // H1：统一走缓存 Notifier，dispose 后仍可完成终态落库。
+      final messagesNotifier =
+          _messagesNotifier ?? ref.read(messagesProvider.notifier);
+      await messagesNotifier!.update(ChatMessage(
             id: assistantId,
             conversationId: conversationId,
             role: 'assistant',
@@ -785,6 +823,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   /// 相册选图：读取原图并压缩为 Base64 图片附件（OpenAI image_url 兼容）。
+  ///
+  /// L5：压缩后仍校验字节上限，超过 20MB 拒绝并提示，防止超大图
+  /// 以 Base64 形式膨胀请求体。
   Future<void> _pickImageFromGallery() async {
     try {
       final picked = await ImagePicker().pickImage(
@@ -795,6 +836,15 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       );
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
+      final sizeError = ChatPage.checkAttachmentSize(bytes.length);
+      if (sizeError != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(content: Text(sizeError)));
+        }
+        return;
+      }
       if (!mounted) return;
       setState(() {
         _pendingAttachments.add(MessageAttachment(
@@ -815,23 +865,47 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   /// 文件选择器：读取文件为文件附件（附文本预览，便于模型理解）。
+  ///
+  /// M3：① 不再 `withData: true` 全量读入内存 —— 先按路径取真实大小做
+  /// 20MB 预检，超限直接拒绝并提示，避免 FilePicker 大文件 OOM；
+  /// ② 通过预检后才按需读取字节并生成 Base64。
   Future<void> _pickFile() async {
     try {
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: false,
-        withData: true,
+        // M3：不在选择阶段全量读内存，交由下方按需读取。
+        withData: false,
       );
       if (result == null || result.files.isEmpty) return;
       final file = result.files.first;
-      final bytes = file.bytes;
       final path = file.path;
-      Uint8List? data = bytes;
-      if (data == null && path != null) {
+
+      // M3：附件大小预检（不读入内存）。
+      final int size;
+      if (path != null) {
+        size = await File(path).length();
+      } else {
+        // 无路径平台（web 等）：fallback 到平台元数据，无则拒绝。
+        size = file.size > 0 ? file.size : 0;
+      }
+      final sizeError = ChatPage.checkAttachmentSize(size);
+      if (sizeError != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(content: Text(sizeError)));
+        }
+        return;
+      }
+
+      Uint8List? data;
+      if (path != null) {
         data = await File(path).readAsBytes();
+      } else {
+        data = file.bytes;
       }
       if (data == null) return;
-      final size = data.length;
-      final dataBase64 = size <= 20 * 1024 * 1024 ? base64Encode(data) : null;
+      final dataBase64 = base64Encode(data);
       // 文本类文件提取前 120 字符预览；其余跳过。
       String? preview;
       final lowerName = file.name.toLowerCase();
@@ -922,28 +996,42 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   /// 失败/停止终态落库（保留已生成内容，错误附带中文提示）。
+  ///
+  /// H1：不再依赖 mounted —— 用户发送中离开页面时 State 已被 dispose，
+  /// 但流式请求已被取消；此时仍需把终态写入数据库，避免消息永远卡在
+  /// streaming 僵尸态。UI 提示（SnackBar）仅在 State 存活时展示。
   Future<void> _finishAssistant({
     required String status,
     required String errorMessage,
   }) async {
     final id = _currentAssistantId;
     final conv = ref.read(selectedConversationProvider);
-    if (!mounted) return;
     if (id == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(errorMessage)));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(errorMessage)));
+      }
       return;
     }
+    // H1：读取消息列表时若 State 已 dispose，改用缓存 Notifier 的当前状态兜底。
+    List<ChatMessage> messages;
+    if (mounted) {
+      messages = ref.read(messagesProvider);
+    } else {
+      messages = _messagesNotifier?.snapshot ?? const [];
+    }
     ChatMessage? current;
-    for (final m in ref.read(messagesProvider)) {
+    for (final m in messages) {
       if (m.id == id) {
         current = m;
         break;
       }
     }
     if (current == null) return;
-    await ref.read(messagesProvider.notifier)
-        .update(current.copyWith(status: status, errorMessage: errorMessage));
+    // H1：统一用 initState 缓存的 Notifier 落库，不依赖 ref/mounted。
+    final notifier = _messagesNotifier ?? ref.read(messagesProvider.notifier);
+    await notifier!.update(
+        current.copyWith(status: status, errorMessage: errorMessage));
     if (conv != null) {
       await _updateConversationMeta(
         conv.id!,
@@ -1075,17 +1163,22 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   /// 刷新会话摘要与最后更新时间（会话列表自动联动）。
+  ///
+  /// H1：使用 initState 缓存的 Notifier（dispose 后 ref 不可用），
+  /// 保证发送中离开页面时终态元数据仍能落库。
   Future<void> _updateConversationMeta(int convId, String summary, int now) async {
     Conversation? conv;
-    for (final c in ref.read(conversationsProvider)) {
+    final convs = _conversationsNotifier?.snapshot ?? const <Conversation>[];
+    for (final c in convs) {
       if (c.id == convId) {
         conv = c;
         break;
       }
     }
     if (conv == null) return;
-    await ref.read(conversationsProvider.notifier)
-        .update(conv.copyWith(lastMessage: summary, updatedAt: now));
+    final notifier = _conversationsNotifier ??
+        ref.read(conversationsProvider.notifier);
+    await notifier!.update(conv.copyWith(lastMessage: summary, updatedAt: now));
   }
 
   /// 当前 API 配置：会话绑定 > 首个启用 > 首个。
@@ -1301,6 +1394,15 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         );
       }
     });
+  }
+
+  /// L6：流式高频回调场景的节流版自动滚动 —— 两次滚动间隔不低于
+  /// [_autoScrollThrottle]，避免每 token 触发一次 200ms 动画导致卡顿。
+  void _scrollToBottomThrottled() {
+    final now = DateTime.now();
+    if (now.difference(_lastAutoScrollAt) < _autoScrollThrottle) return;
+    _lastAutoScrollAt = now;
+    _scrollToBottom();
   }
 
   /// R12：跨会话搜索跳转定位。先按索引估算位置滚动，待目标消息

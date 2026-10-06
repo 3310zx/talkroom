@@ -107,8 +107,6 @@ class AppDatabase {
       )
     ''');
     await db.execute('CREATE INDEX idx_messages_conv ON messages(conversation_id, created_at)');
-    // 同步字段（PRD 7.4，幂等补充：旧库经 onUpgrade 走 _createSyncTables）
-    await _createSyncTables(db);
 
     await db.execute('''
       CREATE TABLE cache_hits (

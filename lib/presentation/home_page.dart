@@ -33,21 +33,34 @@ class _HomePageState extends ConsumerState<HomePage> {
   /// 宽屏 Scaffold key：用于打开设置抽屉。
   final GlobalKey<ScaffoldState> _wideScaffoldKey = GlobalKey<ScaffoldState>();
 
+  /// H2：聊天区保活 key。宽屏（840/1100dp 断点切换、双栏/三栏互切）与窄屏
+  /// 底部 Tab 之间共享同一 GlobalKey，Flutter 会复用 ChatPage 的 Element/State，
+  /// 从而保留草稿、附件、滚动位置与生成中上下文。
+  final GlobalKey _chatKeepAliveKey = GlobalKey();
+
+  /// M7：宽屏 NavigationRail 选中态跟随设置抽屉开合。
+  bool _railSettingsSelected = false;
+
   @override
   void initState() {
     super.initState();
     Future<void>(() async {
-      await ref.read(apiConfigsProvider.notifier).load();
-      await ref.read(conversationsProvider.notifier).load();
-      await ref.read(settingsProvider.notifier).load();
-      // 主动消息：加载任务并启动调度器（含启动补跑检查）
-      await ref.read(activeTasksProvider.notifier).load();
-      ref.read(activeTaskSchedulerProvider).start();
-      // P1 局域网同步：按设置自动拉起本地服务器（电脑端）与同步引擎（客户端）
-      await _maybeAutoStartServer();
-      await _maybeStartSyncEngine();
-      // 启动行为：按设置定位会话（回到退出时对话 / 保持新建状态）
-      await _applyStartupBehavior();
+      try {
+        await ref.read(apiConfigsProvider.notifier).load();
+        await ref.read(conversationsProvider.notifier).load();
+        await ref.read(settingsProvider.notifier).load();
+        // 主动消息：加载任务并启动调度器（含启动补跑检查）
+        await ref.read(activeTasksProvider.notifier).load();
+        ref.read(activeTaskSchedulerProvider).start();
+        // P1 局域网同步：按设置自动拉起本地服务器（电脑端）与同步引擎（客户端）
+        await _maybeAutoStartServer();
+        await _maybeStartSyncEngine();
+        // 启动行为：按设置定位会话（回到退出时对话 / 保持新建状态）
+        await _applyStartupBehavior();
+      } catch (e, st) {
+        // M1：启动链任一步失败不再中断后续流程，仅记录日志避免静默。
+        debugPrint('HomePage startup chain failed: $e\n$st');
+      }
     });
   }
 
@@ -122,7 +135,10 @@ class _HomePageState extends ConsumerState<HomePage> {
         return Scaffold(
           body: IndexedStack(
             index: mobileTab,
-            children: const [ChatPage(), SettingsPage()],
+            children: [
+              ChatPage(key: _chatKeepAliveKey),
+              const SettingsPage(),
+            ],
           ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: mobileTab,
@@ -158,15 +174,23 @@ class _HomePageState extends ConsumerState<HomePage> {
         width: (maxWidth * 0.36).clamp(320.0, 440.0),
         child: const SettingsPage(),
       ),
+      // M7：抽屉开合同步 NavigationRail 选中态，关闭时自动回到「聊天」。
+      onEndDrawerChanged: (isOpen) {
+        if (_railSettingsSelected != isOpen) {
+          setState(() => _railSettingsSelected = isOpen);
+        }
+      },
       body: Row(
         children: [
           NavigationRail(
-            selectedIndex: 0,
+            selectedIndex: _railSettingsSelected ? 1 : 0,
             onDestinationSelected: (index) {
               if (index == 1) {
                 // 设置页抽屉化：宽屏下从右侧滑出设置页。
+                setState(() => _railSettingsSelected = true);
                 _wideScaffoldKey.currentState?.openEndDrawer();
               } else {
+                _wideScaffoldKey.currentState?.closeEndDrawer();
                 ref.read(mobileTabProvider.notifier).state = index;
               }
             },
@@ -188,15 +212,16 @@ class _HomePageState extends ConsumerState<HomePage> {
           SizedBox(width: leftWidth, child: const SessionListPage()),
           const VerticalDivider(width: 1),
           Expanded(
+            // H2：聊天区在 840/1100dp 断点互切时共享同一 GlobalKey 保活 State。
             child: maxWidth >= 1100
                 ? Row(
                     children: [
-                      const Expanded(child: ChatPage()),
+                      Expanded(child: ChatPage(key: _chatKeepAliveKey)),
                       const VerticalDivider(width: 1),
                       SizedBox(width: rightWidth, child: const ChatDetailPanel()),
                     ],
                   )
-                : const ChatPage(),
+                : ChatPage(key: _chatKeepAliveKey),
           ),
         ],
       ),
