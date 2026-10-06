@@ -618,9 +618,7 @@ class _ModelTile extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         border: Border.all(
-          color: Theme.of(context).brightness == Brightness.dark
-              ? const Color(0xFF333333)
-              : colorScheme.outlineVariant,
+          color: colorScheme.outlineVariant,
         ),
         borderRadius: BorderRadius.circular(12),
       ),

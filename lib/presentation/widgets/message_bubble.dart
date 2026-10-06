@@ -187,11 +187,14 @@ class MessageBubble extends StatelessWidget {
                   ),
                 ),
               if (isStopped)
-                const Padding(
-                  padding: EdgeInsets.only(top: 4),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     '已停止生成',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
               if (isError && errorMessage != null)
@@ -349,8 +352,7 @@ class _ReasoningCardState extends State<_ReasoningCard> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF2A2A2A) : const Color(0xFFF0F0F0);
+    final bgColor = theme.colorScheme.surfaceContainerHighest;
 
     return Container(
       width: double.infinity,
@@ -886,19 +888,17 @@ class _CodeBlockViewState extends State<_CodeBlockView> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final scheme = Theme.of(context).colorScheme;
     final resolved = _resolvedLanguage;
-    final headerColor = isDark ? const Color(0xFF2D2D2D) : const Color(0xFFE8E8E8);
-    final labelColor = isDark ? Colors.white70 : Colors.black54;
+    final headerColor = scheme.surfaceContainerHighest;
+    final labelColor = scheme.onSurfaceVariant;
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
       width: double.infinity,
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E1E1E) : const Color(0xFFF7F7F7),
+        color: scheme.surfaceContainer,
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: isDark ? const Color(0x33777777) : const Color(0x33000000),
-        ),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -933,18 +933,14 @@ class _CodeBlockViewState extends State<_CodeBlockView> {
                         Icon(
                           _copied ? Icons.check : Icons.copy,
                           size: 14,
-                          color: _copied
-                              ? (isDark ? Colors.greenAccent : Colors.green)
-                              : labelColor,
+                          color: _copied ? scheme.primary : labelColor,
                         ),
                         const SizedBox(width: 4),
                         Text(
                           _copied ? '已复制' : '复制',
                           style: TextStyle(
                             fontSize: 11,
-                            color: _copied
-                                ? (isDark ? Colors.greenAccent : Colors.green)
-                                : labelColor,
+                            color: _copied ? scheme.primary : labelColor,
                           ),
                         ),
                       ],
@@ -960,7 +956,9 @@ class _CodeBlockViewState extends State<_CodeBlockView> {
             child: HighlightView(
               widget.source,
               language: resolved,
-              theme: isDark ? atomOneDarkTheme : atomOneLightTheme,
+              theme: scheme.brightness == Brightness.dark
+                  ? atomOneDarkTheme
+                  : atomOneLightTheme,
               padding: EdgeInsets.zero,
             ),
           ),

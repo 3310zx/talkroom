@@ -16,10 +16,12 @@ import 'chat/chat_page.dart';
 import 'session_list/session_list_page.dart';
 import 'settings/settings_page.dart';
 
-/// 首页：三栏导航骨架（微信风格布局）。
+/// 首页：M3 自适应导航骨架。
 ///
-/// - 宽屏（>= 900px）：左 会话列表 / 中 聊天 / 右 详情辅助面板
-/// - 窄屏：底部 Tab（聊天 / 设置）
+/// - 宽屏（>= 840dp，平板/电脑）：左侧 NavigationRail + 双栏布局
+///   （会话列表 | 聊天）；聊天区足够宽（>= 1100dp）时再分栏出右侧详情面板；
+///   设置页以右侧抽屉（Drawer）呈现。
+/// - 窄屏（手机）：底部 NavigationBar 单栏 + IndexedStack 多 Tab（聊天/设置）。
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
@@ -28,6 +30,8 @@ class HomePage extends ConsumerStatefulWidget {
 }
 
 class _HomePageState extends ConsumerState<HomePage> {
+  /// 宽屏 Scaffold key：用于打开设置抽屉。
+  final GlobalKey<ScaffoldState> _wideScaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
@@ -110,25 +114,11 @@ class _HomePageState extends ConsumerState<HomePage> {
     final mobileTab = ref.watch(mobileTabProvider);
     return LayoutBuilder(
       builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 900;
+        final wide = constraints.maxWidth >= 840;
         if (wide) {
-          // 宽屏三栏（平板/桌面）：左会话列表 / 中聊天 / 右详情辅助面板，
-          // 各栏宽度按屏幕尺寸自适应（截图风格：大屏三栏）。
-          final maxWidth = constraints.maxWidth;
-          final leftWidth = (maxWidth * 0.20).clamp(240.0, 320.0).toDouble();
-          final rightWidth = (maxWidth * 0.22).clamp(260.0, 360.0).toDouble();
-          return Scaffold(
-            body: Row(
-              children: [
-                SizedBox(width: leftWidth, child: const SessionListPage()),
-                const VerticalDivider(width: 1),
-                const Expanded(child: ChatPage()),
-                const VerticalDivider(width: 1),
-                SizedBox(width: rightWidth, child: const ChatDetailPanel()),
-              ],
-            ),
-          );
+          return _buildWide(context, constraints);
         }
+        // 窄屏（手机）：底部 NavigationBar 单栏 + IndexedStack 多 Tab。
         return Scaffold(
           body: IndexedStack(
             index: mobileTab,
@@ -153,6 +143,63 @@ class _HomePageState extends ConsumerState<HomePage> {
           ),
         );
       },
+    );
+  }
+
+  /// 宽屏（>= 840dp）：NavigationRail + 双栏布局（会话列表 | 聊天）。
+  /// 聊天区足够宽时再分栏出右侧详情面板；设置页抽屉化（右侧 Drawer）。
+  Widget _buildWide(BuildContext context, BoxConstraints constraints) {
+    final maxWidth = constraints.maxWidth;
+    final leftWidth = (maxWidth * 0.20).clamp(240.0, 320.0).toDouble();
+    final rightWidth = (maxWidth * 0.22).clamp(260.0, 360.0).toDouble();
+    return Scaffold(
+      key: _wideScaffoldKey,
+      endDrawer: Drawer(
+        width: (maxWidth * 0.36).clamp(320.0, 440.0),
+        child: const SettingsPage(),
+      ),
+      body: Row(
+        children: [
+          NavigationRail(
+            selectedIndex: 0,
+            onDestinationSelected: (index) {
+              if (index == 1) {
+                // 设置页抽屉化：宽屏下从右侧滑出设置页。
+                _wideScaffoldKey.currentState?.openEndDrawer();
+              } else {
+                ref.read(mobileTabProvider.notifier).state = index;
+              }
+            },
+            labelType: NavigationRailLabelType.all,
+            destinations: const [
+              NavigationRailDestination(
+                icon: Icon(Icons.chat_bubble_outline),
+                selectedIcon: Icon(Icons.chat_bubble),
+                label: Text('聊天'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings),
+                label: Text('设置'),
+              ),
+            ],
+          ),
+          const VerticalDivider(width: 1),
+          SizedBox(width: leftWidth, child: const SessionListPage()),
+          const VerticalDivider(width: 1),
+          Expanded(
+            child: maxWidth >= 1100
+                ? Row(
+                    children: [
+                      const Expanded(child: ChatPage()),
+                      const VerticalDivider(width: 1),
+                      SizedBox(width: rightWidth, child: const ChatDetailPanel()),
+                    ],
+                  )
+                : const ChatPage(),
+          ),
+        ],
+      ),
     );
   }
 }

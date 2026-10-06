@@ -368,8 +368,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                   () => _pendingAttachments.removeAt(index)),
                               child: Container(
                                 padding: const EdgeInsets.all(2),
-                                decoration: const BoxDecoration(
-                                  color: Colors.black54,
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
                                   shape: BoxShape.circle,
                                 ),
                                 child: const Icon(Icons.close,

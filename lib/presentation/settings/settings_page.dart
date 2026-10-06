@@ -120,8 +120,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ? Icons.cloud_done
                   : (syncStatus.enabled ? Icons.cloud_queue : Icons.cloud_off),
               color: syncStatus.connected
-                  ? Colors.green
-                  : (syncStatus.enabled ? Colors.orange : null),
+                  ? Theme.of(context).colorScheme.primary
+                  : (syncStatus.enabled
+                      ? Theme.of(context).colorScheme.tertiary
+                      : null),
             ),
             title: const Text('消息同步 / 配对'),
             subtitle: Text(
@@ -139,7 +141,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ListTile(
             leading: serverStatus == null
                 ? const Icon(Icons.lan_outlined)
-                : const Icon(Icons.lan, color: Colors.green),
+                : Icon(
+                    Icons.lan,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
             title: Text(serverStatus == null ? '本地服务器未启动' : '本地服务器运行中'),
             subtitle: Text(
               serverStatus == null
@@ -737,7 +742,7 @@ class _DownloadDialogState extends State<_DownloadDialog> {
               ),
             ] else if (_apkPath != null) ...[
               Icon(Icons.check_circle,
-                  color: Colors.green, size: 40),
+                  color: theme.colorScheme.primary, size: 40),
               const SizedBox(height: 12),
               Text('下载完成 · ${_fmtMb(_received)}',
                   textAlign: TextAlign.center,
