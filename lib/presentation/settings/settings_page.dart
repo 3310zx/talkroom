@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -52,6 +53,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isDesktop = !kIsWeb &&
+        (Platform.isMacOS || Platform.isWindows || Platform.isLinux);
     final apiConfigs = ref.watch(apiConfigsProvider);
     final serverStatus = ref.watch(localServerStatusProvider);
     final settings = ref.watch(settingsProvider);
@@ -125,30 +128,32 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const Divider(),
           _sectionHeader('局域网同步（P1）'),
 
-          ListTile(
-            leading: Icon(
-              syncStatus.connected
-                  ? Icons.cloud_done
-                  : (syncStatus.enabled ? Icons.cloud_queue : Icons.cloud_off),
-              color: syncStatus.connected
-                  ? Theme.of(context).colorScheme.primary
-                  : (syncStatus.enabled
-                      ? Theme.of(context).colorScheme.tertiary
-                      : null),
+          // 扫码配对为移动端专属入口（手机扫电脑端二维码），桌面端隐藏
+          if (!isDesktop)
+            ListTile(
+              leading: Icon(
+                syncStatus.connected
+                    ? Icons.cloud_done
+                    : (syncStatus.enabled ? Icons.cloud_queue : Icons.cloud_off),
+                color: syncStatus.connected
+                    ? Theme.of(context).colorScheme.primary
+                    : (syncStatus.enabled
+                        ? Theme.of(context).colorScheme.tertiary
+                        : null),
+              ),
+              title: const Text('消息同步 / 配对'),
+              subtitle: Text(
+                syncStatus.enabled
+                    ? (syncStatus.connected
+                        ? '已连接 ${syncStatus.host}:${syncStatus.port}'
+                        : '已配对，等待连接')
+                    : '未开启同步',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SyncSetupPage()),
+              ),
             ),
-            title: const Text('消息同步 / 配对'),
-            subtitle: Text(
-              syncStatus.enabled
-                  ? (syncStatus.connected
-                      ? '已连接 ${syncStatus.host}:${syncStatus.port}'
-                      : '已配对，等待连接')
-                  : '未开启同步',
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SyncSetupPage()),
-            ),
-          ),
           ListTile(
             leading: serverStatus == null
                 ? const Icon(Icons.lan_outlined)
