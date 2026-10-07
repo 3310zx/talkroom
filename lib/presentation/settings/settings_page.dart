@@ -585,11 +585,67 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       } else {
         _showSnack('当前已是最新版本 $current');
       }
-    } catch (e) {
+    } on UpdateCheckException catch (e) {
       if (!mounted) return;
       navigator.pop();
-      _showSnack('检查更新失败：$e');
+      if (e.type == UpdateCheckErrorType.rateLimited ||
+          e.type == UpdateCheckErrorType.forbidden) {
+        await _showUpdateFailedDialog(e.message);
+      } else {
+        _showSnack(e.message.isEmpty ? '检查更新暂时失败，请稍后重试' : e.message);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      navigator.pop();
+      _showSnack('检查更新暂时失败，请稍后重试');
     }
+  }
+
+  /// 403（限流/被拒）引导对话框：提示稍后重试，并提供直链下载兜底与手动重试。
+  Future<void> _showUpdateFailedDialog(String reason) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('检查更新暂时失败'),
+        content: Text('$reason\n\n你也可以直接下载最新版 APK 安装。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('稍后'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _checkForUpdate();
+            },
+            child: const Text('重试'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _downloadDirectLatest();
+            },
+            icon: const Icon(Icons.download),
+            label: const Text('下载最新版'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 403 兜底：GitHub Releases 最新 APK 直链（releases/latest/download），
+  /// 复用 _DownloadDialog / ApkDownloader 应用内下载能力。
+  void _downloadDirectLatest() {
+    const directUrl =
+        'https://github.com/3310zx/talkroom/releases/latest/download/app-release.apk';
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _DownloadDialog(
+        url: directUrl,
+        fileName: 'llm_chat_app_latest.apk',
+      ),
+    );
   }
 
   /// 有新版本时的更新对话框：版本号、Release 名称、更新说明、下载按钮。
