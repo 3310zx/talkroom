@@ -8,6 +8,7 @@ import '../../application/providers/settings_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
 import '../../core/constants.dart';
 import '../../core/theme.dart';
+import '../../core/utils.dart';
 import '../../domain/models/api_config.dart';
 import '../../domain/models/conversation.dart';
 import 'conversation_param_page.dart';
@@ -269,25 +270,9 @@ class ChatDetailPanel extends ConsumerWidget {
   }
 
   /// 当前模型：会话绑定 > 配置第一个模型（与聊天页逻辑一致）。
-  String _resolveModel(ApiConfig? config, Conversation? conv) {
-    if (conv != null && conv.modelId != null && conv.modelId!.isNotEmpty) {
-      return conv.modelId!;
-    }
-    if (config != null && config.modelIds.isNotEmpty) {
-      return config.modelIds.first;
-    }
-    return '';
-  }
+  String _resolveModel(ApiConfig? config, Conversation? conv) =>
+      resolveModel(config, conv);
 
   /// 简单时间展示：今天 HH:mm；今年 MM-dd；更早 yyyy-MM-dd。
-  String _formatTime(int ms) {
-    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
-    final now = DateTime.now();
-    String two(int v) => v.toString().padLeft(2, '0');
-    if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
-      return '${two(dt.hour)}:${two(dt.minute)}';
-    }
-    if (dt.year == now.year) return '${two(dt.month)}-${two(dt.day)}';
-    return '${dt.year}-${two(dt.month)}-${two(dt.day)}';
-  }
+  String _formatTime(int ms) => formatTime(ms);
 }

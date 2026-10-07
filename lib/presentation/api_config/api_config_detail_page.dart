@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/providers/api_configs_provider.dart';
+import '../../core/utils.dart';
 import '../../data/preset_providers.dart';
 import '../../data/secure_storage/api_key_store.dart';
 import '../../domain/models/api_config.dart';
@@ -594,7 +595,7 @@ class _ApiConfigDetailPageState extends ConsumerState<ApiConfigDetailPage> {
 
   void _toast(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    showToast(context, message);
   }
 }
 

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../application/providers/settings_provider.dart';
 import '../../application/providers/sync_provider.dart';
 import '../../core/constants.dart';
+import '../../core/utils.dart';
 import 'scan_pair_page.dart';
 
 /// 客户端连接配置页（PRD 第 7 章 7.3）。
@@ -92,7 +93,7 @@ class _SyncSetupPageState extends ConsumerState<SyncSetupPage> {
 
   void _toast(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    showToast(context, message);
   }
 
   @override

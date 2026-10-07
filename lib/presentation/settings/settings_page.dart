@@ -11,6 +11,7 @@ import '../../application/providers/sync_provider.dart';
 import '../../core/constants.dart';
 import '../../core/param_presets.dart';
 import '../../core/theme.dart';
+import '../../core/utils.dart';
 import '../../services/apk_downloader.dart';
 import '../../services/update_service.dart';
 import '../active_tasks/active_tasks_page.dart';
@@ -711,11 +712,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     );
   }
 
-  void _showSnack(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _showSnack(String message) => showToast(context, message);
 
   /// 编辑全局默认参数（PRD 4.5.1：temperature/max_tokens/top_p/system_prompt；
   /// R14：增加 frequency_penalty / presence_penalty 与参数预设）。
@@ -1004,9 +1001,7 @@ class _DownloadDialogState extends State<_DownloadDialog> {
 
   void _toast(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    showToast(context, message);
   }
 
   String _fmtMb(int bytes) => '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';

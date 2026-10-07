@@ -5,6 +5,7 @@ import '../../application/providers/conversations_provider.dart';
 import '../../application/providers/messages_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
 import '../../core/theme.dart';
+import '../../core/utils.dart';
 import '../../domain/models/conversation.dart';
 
 /// 窄屏聊天页的会话抽屉：展示会话列表并支持点选切换对话（微信风格）。
@@ -125,16 +126,7 @@ class ChatSessionDrawer extends ConsumerWidget {
   }
 
   /// 会话列表时间：今天 HH:mm；今年 MM-dd；更早 yyyy-MM-dd。
-  String _formatTime(int ms) {
-    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
-    final now = DateTime.now();
-    String two(int v) => v.toString().padLeft(2, '0');
-    if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
-      return '${two(dt.hour)}:${two(dt.minute)}';
-    }
-    if (dt.year == now.year) return '${two(dt.month)}-${two(dt.day)}';
-    return '${dt.year}-${two(dt.month)}-${two(dt.day)}';
-  }
+  String _formatTime(int ms) => formatTime(ms);
 }
 
 extension on Iterable<Conversation> {

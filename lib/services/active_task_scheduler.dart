@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../../core/constants.dart';
+import '../../core/utils.dart';
 import '../../data/secure_storage/api_key_store.dart';
 import '../../domain/models/active_task.dart';
 import '../../domain/models/active_task_log.dart';
@@ -373,11 +374,8 @@ class ActiveTaskScheduler {
     return double.tryParse(v) ?? fallback;
   }
 
-  int _intSetting(Map<String, String> settings, String key, int fallback) {
-    final v = settings[key];
-    if (v == null) return fallback;
-    return int.tryParse(v) ?? fallback;
-  }
+  int _intSetting(Map<String, String> settings, String key, int fallback) =>
+      intSetting(settings, key, fallback);
 
   /// 写入任务执行日志（R16，v1.0.15）：成功 / 失败 / 跳过均留痕。
   Future<void> _writeLog(int taskId, int runAtMs, String status, String summary) async {
@@ -395,14 +393,5 @@ class ActiveTaskScheduler {
   }
 
   /// 会话列表摘要：去 Markdown 标记后的纯文本，截断 40 字。
-  String _summarize(String text) {
-    var plain = text
-        .replaceAll(RegExp(r'```[\s\S]*?```'), ' ')
-        .replaceAll(RegExp(r'`[^`]*`'), ' ')
-        .replaceAll(RegExp(r'[#>*_~\[\]()!|-]'), '')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-    if (plain.length > 40) plain = plain.substring(0, 40);
-    return plain;
-  }
+  String _summarize(String text) => summarize(text);
 }

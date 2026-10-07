@@ -16,6 +16,7 @@ import '../../application/providers/messages_provider.dart';
 import '../../application/providers/settings_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
 import '../../core/constants.dart';
+import '../../core/utils.dart';
 import '../../data/secure_storage/api_key_store.dart';
 import '../../domain/models/api_config.dart';
 import '../../domain/models/conversation.dart';
@@ -1398,15 +1399,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   /// 当前模型：会话绑定 > 配置第一个模型。
-  String _resolveModel(ApiConfig? config, Conversation? conv) {
-    if (conv != null && conv.modelId != null && conv.modelId!.isNotEmpty) {
-      return conv.modelId!;
-    }
-    if (config != null && config.modelIds.isNotEmpty) {
-      return config.modelIds.first;
-    }
-    return '';
-  }
+  String _resolveModel(ApiConfig? config, Conversation? conv) =>
+      resolveModel(config, conv);
 
   /// 顶栏模型名点击：弹出当前服务商可用模型列表供切换。
   ///
@@ -1548,11 +1542,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     );
   }
 
-  void _showSnack(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _showSnack(String message) => showToast(context, message);
 
   String _buildSubtitle(ApiConfig? api, String model) {
     if (api == null) return '未配置 API · 请到设置页添加';
@@ -1567,23 +1557,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     return double.tryParse(v) ?? fallback;
   }
 
-  int _intSetting(Map<String, String> settings, String key, int fallback) {
-    final v = settings[key];
-    if (v == null) return fallback;
-    return int.tryParse(v) ?? fallback;
-  }
+  int _intSetting(Map<String, String> settings, String key, int fallback) =>
+      intSetting(settings, key, fallback);
 
   /// 会话列表摘要：去 Markdown 标记后的纯文本，截断 40 字（PRD 4.3.2）。
-  String _summarize(String text) {
-    var plain = text
-        .replaceAll(RegExp(r'```[\s\S]*?```'), ' ')
-        .replaceAll(RegExp(r'`[^`]*`'), ' ')
-        .replaceAll(RegExp(r'[#>*_~\[\]()!|-]'), '')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-    if (plain.length > 40) plain = plain.substring(0, 40);
-    return plain;
-  }
+  String _summarize(String text) => summarize(text);
 
   void _scrollToBottom() {
     if (!mounted || !_scrollController.hasClients) return;

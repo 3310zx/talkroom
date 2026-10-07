@@ -28,6 +28,18 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // 体积精简 v1.2.6：仅保留 arm64-v8a，裁剪 armeabi-v7a / x86_64
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    // 体积精简 v1.2.6：插件自带 jni（如 mobile_scanner barhopper）也仅保留 arm64
+    packaging {
+        jniLibs {
+            excludes += listOf("lib/armeabi-v7a/**", "lib/x86_64/**")
+        }
     }
 
     buildTypes {
@@ -35,6 +47,13 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // 体积精简 v1.2.6：开启 R8 压缩 + 资源收缩
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

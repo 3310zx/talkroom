@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../application/providers/conversations_provider.dart';
 import '../../application/providers/messages_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
+import '../../core/utils.dart';
 import '../../domain/models/conversation.dart';
 
 /// 归档会话列表页（R10）：展示已归档会话，支持恢复与删除。
@@ -111,14 +112,5 @@ class ArchiveConversationsPage extends ConsumerWidget {
   }
 
   /// 会话列表时间：今天 HH:mm；今年 MM-dd；更早 yyyy-MM-dd。
-  String _formatTime(int ms) {
-    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
-    final now = DateTime.now();
-    String two(int v) => v.toString().padLeft(2, '0');
-    if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
-      return '${two(dt.hour)}:${two(dt.minute)}';
-    }
-    if (dt.year == now.year) return '${two(dt.month)}-${two(dt.day)}';
-    return '${dt.year}-${two(dt.month)}-${two(dt.day)}';
-  }
+  String _formatTime(int ms) => formatTime(ms);
 }

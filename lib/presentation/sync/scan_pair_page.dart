@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import '../../core/utils.dart';
 
 /// 扫码配对页（R15，v1.0.15）。
 ///
@@ -53,7 +54,7 @@ class _ScanPairPageState extends State<ScanPairPage> {
 
   void _toast(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    showToast(context, message);
   }
 
   @override
