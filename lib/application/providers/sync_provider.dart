@@ -1,12 +1,11 @@
-import 'dart:io';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/platform.dart';
 import '../../services/sync/sync_engine.dart';
 import 'database_provider.dart';
 
 /// 客户端同步引擎实例。
-/// 电脑端（桌面平台）作为权威源（isServerRole=true），手机端（移动平台）为 false。
+/// server 角色：桌面端与 Android（可被 Web 客户端直连）；Web 端恒为客户端。
 final syncEngineProvider = Provider<SyncEngine>(
   (ref) {
     final db = ref.watch(appDatabaseProvider);
@@ -16,10 +15,7 @@ final syncEngineProvider = Provider<SyncEngine>(
       messages: db.messageRepository,
       conversations: db.conversationRepository,
       cursors: db.syncCursorRepository,
-      isServerRole: Platform.isMacOS ||
-          Platform.isWindows ||
-          Platform.isLinux ||
-          Platform.isFuchsia,
+      isServerRole: AppPlatform.isServerCapable,
       onRemoteMessage: (_) {
         // 消息已合并入库；UI 通过消息查询自动刷新
       },

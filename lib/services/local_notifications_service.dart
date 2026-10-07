@@ -1,6 +1,6 @@
-import 'dart:io';
-
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+import '../core/platform.dart';
 
 /// 本地通知封装（PRD 5.3：主动消息生成完成/失败提醒，点击跳转对应会话）。
 ///
@@ -50,7 +50,7 @@ class LocalNotificationsService {
         .resolvePlatformSpecificImplementation<
             IOSFlutterLocalNotificationsPlugin>()
         ?.requestPermissions(alert: true, badge: true, sound: true);
-    if (Platform.isMacOS) {
+    if (AppPlatform.isMacOS) {
       await _plugin
           .resolvePlatformSpecificImplementation<
               MacOSFlutterLocalNotificationsPlugin>()

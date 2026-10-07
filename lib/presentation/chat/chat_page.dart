@@ -1,9 +1,8 @@
 import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -16,6 +15,7 @@ import '../../application/providers/messages_provider.dart';
 import '../../application/providers/settings_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
 import '../../core/constants.dart';
+import '../../core/file_io.dart' as file_io;
 import '../../core/utils.dart';
 import '../../data/secure_storage/api_key_store.dart';
 import '../../domain/models/api_config.dart';
@@ -987,7 +987,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: false,
         // M3：不在选择阶段全量读内存，交由下方按需读取。
-        withData: false,
+        // Web 无路径可读，必须由选择器携带 bytes（withData: true）。
+        withData: kIsWeb,
       );
       if (result == null || result.files.isEmpty) return;
       final file = result.files.first;
@@ -996,7 +997,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // M3：附件大小预检（不读入内存）。
       final int size;
       if (path != null) {
-        size = await File(path).length();
+        size = await file_io.fileLength(path);
       } else {
         // 无路径平台（web 等）：fallback 到平台元数据，无则拒绝。
         size = file.size > 0 ? file.size : 0;
@@ -1013,7 +1014,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
       Uint8List? data;
       if (path != null) {
-        data = await File(path).readAsBytes();
+        data = await file_io.readFileBytes(path);
       } else {
         data = file.bytes;
       }
@@ -1074,8 +1075,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         _pendingAttachments.add(attachment);
       });
       // 异步解析（compute isolate，防大文件阻塞 UI）。
-      if (attachment.parseStatus == 'parsing' && path != null) {
-        _parsePendingAttachment(attachment, path);
+      if (attachment.parseStatus == 'parsing') {
+        if (path != null) {
+          _parsePendingAttachment(attachment, path);
+        } else {
+          // Web：无路径，使用 pick 读入的字节解析。
+          _parsePendingAttachmentBytes(attachment, data);
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -1092,6 +1098,24 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     try {
       final result =
           await AttachmentParser.parseInBackground(path, attachment.name);
+      _updatePendingAttachment(
+        attachment,
+        parsedText: result.text,
+        parsedCharCount: result.charCount,
+        parseStatus: result.parseStatus,
+      );
+    } catch (e) {
+      // compute 隔离异常（罕见）：降级为 failed，发送时原样携带文件。
+      _updatePendingAttachment(attachment, parseStatus: 'failed');
+    }
+  }
+
+  /// Web 版：无路径，直接以 pick 读到的字节异步解析附件文本。
+  Future<void> _parsePendingAttachmentBytes(
+      MessageAttachment attachment, Uint8List bytes) async {
+    try {
+      final result = await AttachmentParser.parseInBackgroundBytes(
+          bytes, attachment.name);
       _updatePendingAttachment(
         attachment,
         parsedText: result.text,

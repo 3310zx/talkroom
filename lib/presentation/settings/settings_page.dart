@@ -1,7 +1,4 @@
-import 'dart:io';
-
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -11,6 +8,7 @@ import '../../application/providers/settings_provider.dart';
 import '../../application/providers/sync_provider.dart';
 import '../../core/constants.dart';
 import '../../core/param_presets.dart';
+import '../../core/platform.dart';
 import '../../core/theme.dart';
 import '../../core/utils.dart';
 import '../../services/apk_downloader.dart';
@@ -53,8 +51,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = !kIsWeb &&
-        (Platform.isMacOS || Platform.isWindows || Platform.isLinux);
     final apiConfigs = ref.watch(apiConfigsProvider);
     final serverStatus = ref.watch(localServerStatusProvider);
     final settings = ref.watch(settingsProvider);
@@ -128,8 +124,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const Divider(),
           _sectionHeader('局域网同步（P1）'),
 
-          // 扫码配对为移动端专属入口（手机扫电脑端二维码），桌面端隐藏
-          if (!isDesktop)
+          // 扫码配对为移动端专属入口（手机扫电脑端二维码），桌面/Web 端隐藏
+          if (AppPlatform.isMobile)
             ListTile(
               leading: Icon(
                 syncStatus.connected
@@ -993,7 +989,7 @@ class _DownloadDialogState extends State<_DownloadDialog> {
   Future<void> _install() async {
     final path = _apkPath;
     if (path == null) return;
-    if (!Platform.isAndroid) {
+    if (!AppPlatform.isAndroid) {
       _toast('当前平台不支持直接安装 APK。文件已保存到：\n$path');
       return;
     }

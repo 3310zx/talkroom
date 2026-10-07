@@ -1,4 +1,3 @@
-import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../domain/repositories/active_task_repository.dart';
@@ -17,8 +16,12 @@ import '../repositories/message_repository_impl.dart';
 import '../repositories/prompt_template_repository_impl.dart';
 import '../repositories/settings_repository_impl.dart';
 import '../repositories/sync_cursor_repository_impl.dart';
+import 'db_path_io.dart' if (dart.library.html) 'db_path_web.dart' as db_path;
 
 /// SQLite 数据库单例：负责打开、建表、迁移，并暴露各仓储实现。
+///
+/// Web 端：databaseFactory 由 main 注入 sqflite_common_ffi_web（IndexedDB），
+/// 数据库路径退化为 IndexedDB 库名，见 db_path_web.dart。
 ///
 /// 建表 SQL 对齐 PRD 第 6.1.2 节（M0 范围六张表；局域网同步表见 TODO）。
 class AppDatabase {
@@ -31,8 +34,8 @@ class AppDatabase {
   Future<Database> open() async {
     if (_db != null) return _db!;
 
-    final dir = await getApplicationSupportDirectory();
-    final path = '${dir.path}/llm_chat_app.db';
+    // IO：应用支持目录下 SQLite 文件；Web：IndexedDB 库名。
+    final path = await db_path.resolveDatabasePath();
 
     _db = await openDatabase(
       path,

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:dio/dio.dart';
 
@@ -12,6 +11,7 @@ import '../../domain/repositories/message_repository.dart';
 import '../../domain/repositories/settings_repository.dart';
 import '../../domain/repositories/sync_cursor_repository.dart';
 import 'sync_json.dart';
+import 'sync_socket.dart';
 
 /// 客户端同步引擎（PRD 第 7 章）。
 ///
@@ -57,7 +57,7 @@ class SyncEngine {
     receiveTimeout: const Duration(seconds: 30),
   ));
 
-  WebSocket? _ws;
+  SyncSocketConnection? _ws;
   Timer? _pollTimer;
   Timer? _reconnectTimer;
   bool _disposed = false;
@@ -68,7 +68,7 @@ class SyncEngine {
   String _deviceId = '';
   String _token = '';
 
-  bool get isConnected => _ws != null && _ws!.readyState == WebSocket.open;
+  bool get isConnected => _ws?.isOpen ?? false;
 
   /// 读取持久化配置，若启用同步则启动引擎。
   Future<void> startIfEnabled() async {
@@ -98,7 +98,7 @@ class SyncEngine {
   Future<void> _drain() async {
     _pollTimer?.cancel();
     _reconnectTimer?.cancel();
-    await _ws?.close(WebSocketStatus.normalClosure);
+    await _ws?.close();
     _ws = null;
     _setConnected(false);
   }
@@ -317,38 +317,33 @@ class SyncEngine {
 
   // ---- WebSocket ----
 
-  void _connectWs() {
+  Future<void> _connectWs() async {
     _reconnectTimer?.cancel();
     if (_disposed || _host.isEmpty) return;
     try {
-      WebSocket.connect('ws://$_host:$_port/v1/ws').then((ws) {
-        if (_disposed) {
-          ws.close();
-          return;
-        }
-        _ws = ws;
-        _setConnected(true);
-        ws.listen(
-          (raw) {
-            _handleWsMessage(raw);
-          },
-          onDone: () {
-            _ws = null;
-            _setConnected(false);
-            _scheduleReconnect();
-          },
-          onError: (_) {
-            _ws = null;
-            _setConnected(false);
-            _scheduleReconnect();
-          },
-          cancelOnError: true,
-        );
-      }).catchError((_) {
-        _setConnected(false);
-        _scheduleReconnect();
-      });
+      final conn = await connectSyncSocket('ws://$_host:$_port/v1/ws');
+      if (_disposed) {
+        await conn.close();
+        return;
+      }
+      _ws = conn;
+      _setConnected(true);
+      conn.messages.listen(
+        _handleWsMessage,
+        onDone: () {
+          if (identical(_ws, conn)) _ws = null;
+          _setConnected(false);
+          _scheduleReconnect();
+        },
+        onError: (_) {
+          if (identical(_ws, conn)) _ws = null;
+          _setConnected(false);
+          _scheduleReconnect();
+        },
+        cancelOnError: true,
+      );
     } catch (_) {
+      _setConnected(false);
       _scheduleReconnect();
     }
   }

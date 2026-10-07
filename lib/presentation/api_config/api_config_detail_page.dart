@@ -1,11 +1,11 @@
-import 'dart:io';
-
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/providers/api_configs_provider.dart';
+import '../../core/open_url_io.dart'
+    if (dart.library.html) '../../core/open_url_web.dart' as open_url;
 import '../../core/utils.dart';
 import '../../data/preset_providers.dart';
 import '../../data/secure_storage/api_key_store.dart';
@@ -319,13 +319,7 @@ class _ApiConfigDetailPageState extends ConsumerState<ApiConfigDetailPage> {
       return;
     }
     try {
-      if (Platform.isMacOS || Platform.isLinux) {
-        await Process.run('open', [url]);
-      } else if (Platform.isWindows) {
-        await Process.run('cmd', ['/c', 'start', '', url]);
-      } else {
-        _toast('请手动在浏览器打开：$url');
-      }
+      await open_url.openExternalUrl(url);
     } catch (_) {
       _toast('请手动在浏览器打开：$url');
     }
