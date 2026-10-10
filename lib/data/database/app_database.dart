@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../domain/repositories/active_task_repository.dart';
@@ -52,6 +53,14 @@ class AppDatabase {
       throw StateError('AppDatabase.open() 尚未调用，请先初始化数据库。');
     }
     return database;
+  }
+
+  /// 测试专用：以外部 Database（如 ffi 内存库）构造实例，绕过单例与真实路径。
+  @visibleForTesting
+  static AppDatabase forTesting(Database db) {
+    final instance = AppDatabase._();
+    instance._db = db;
+    return instance;
   }
 
   Future<void> _onCreate(Database db, int version) async {

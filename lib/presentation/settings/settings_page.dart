@@ -20,6 +20,7 @@ import '../cache_hits/cache_hits_page.dart';
 import '../prompt_templates/prompt_templates_page.dart';
 import '../sync/local_server_page.dart';
 import '../sync/sync_setup_page.dart';
+import 'backup_section.dart';
 
 /// 设置页（三栏右栏 / 移动端设置 Tab）。
 ///
@@ -209,6 +210,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               ),
             ),
           ),
+
+          const BackupSection(),
 
           const Divider(),
           _sectionHeader('关于'),
