@@ -284,11 +284,36 @@ abstract final class BackupService {
     );
   }
 
+  /// 仅当值为 [String] 时返回，否则 null（防御 Chatbox 个别字段类型异常导致
+  /// `as String?` 抛 TypeError 而整条会话被跳过）。
+  static String? _stringOrNull(Object? value) => value is String ? value : null;
+
+  /// 解析 Chatbox 会话标题，规则（按优先级）：
+  /// 1. `name`，trim 后非空则取之（真实备份存在 name 以 `\n` 开头的脏数据，
+  ///    若未 trim，会话列表单行渲染会因首行为空而显示空白标题）；
+  /// 2. `threadName`，同样 trim；
+  /// 3. `topics[].title`（Chatbox 话题模式：标题可能存于当前话题而非会话名），
+  ///    取首个 trim 后非空的话题标题；
+  /// 4. 「未命名会话」（uuid 对用户无意义，不作为兜底标题）。
+  static String _resolveChatboxTitle(Map<String, dynamic> root) {
+    final name = _stringOrNull(root['name'])?.trim() ?? '';
+    if (name.isNotEmpty) return name;
+    final thread = _stringOrNull(root['threadName'])?.trim() ?? '';
+    if (thread.isNotEmpty) return thread;
+    final topics = root['topics'];
+    if (topics is List) {
+      for (final topic in topics) {
+        if (topic is! Map<String, dynamic>) continue;
+        final topicTitle = _stringOrNull(topic['title'])?.trim() ?? '';
+        if (topicTitle.isNotEmpty) return topicTitle;
+      }
+    }
+    return '未命名会话';
+  }
+
   static ChatboxSession _parseChatboxSession(Map<String, dynamic> root) {
-    final id = (root['id'] as String?) ?? '';
-    final title = (root['name'] as String?) ??
-        (root['threadName'] as String?) ??
-        (id.isEmpty ? '未命名会话' : id);
+    final id = _stringOrNull(root['id']) ?? '';
+    final title = _resolveChatboxTitle(root);
 
     final settingsMap = root['settings'];
     String? provider;
@@ -418,7 +443,7 @@ abstract final class BackupService {
 
       conversations.add(
         BackupConversation(
-          title: s.title,
+          title: s.title.trim().isEmpty ? '未命名会话' : s.title,
           apiConfigRef: null,
           modelId: s.modelId,
           temperature: s.temperature,

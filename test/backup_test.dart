@@ -152,7 +152,24 @@ List<int> _sampleChatboxZip() {
   return encoder.encode(archive);
 }
 
-/// 建 ffi 内存库并建核心表（与 AppDatabase 迁移后真实结构对齐，含 v7 追加列）。
+/// 构造仅含单个自定义会话的 Chatbox zip 字节（用于标题解析用例）。
+List<int> _chatboxZipWithSession(Map<String, dynamic> sessionRoot) {
+  final archive = Archive();
+  archive.addFile(ArchiveFile(
+    'settings.json',
+    0,
+    utf8.encode(jsonEncode({'providers': {}})),
+  ));
+  archive.addFile(ArchiveFile(
+    'sessions/bbbbbbbb-cccc-dddd-eeee-ffff00001111/session.json',
+    0,
+    utf8.encode(jsonEncode(sessionRoot)),
+  ));
+  final encoder = ZipEncoder();
+  return encoder.encode(archive);
+}
+
+/// 构造 ffi 内存库并建核心表（与 AppDatabase 迁移后真实结构对齐，含 v7 追加列）。
 /// [enforceTitleCheck] 为 true 时给 conversations.title 加 CHECK 约束（仅回滚测试用）。
 Future<Database> _openMemoryDb({bool enforceTitleCheck = false}) async {
   sqfliteFfiInit();
@@ -310,6 +327,58 @@ void main() {
       final chatbox = BackupService.parseChatboxZip(_sampleChatboxZip());
       final mapped = BackupService.mapChatboxToBackup(chatbox, const []);
       expect(mapped.conversations.single.modelId, 'deepseek-ai/DeepSeek-V3');
+    });
+
+    test('会话 name 以换行开头时标题被 trim（真实脏数据回归）', () {
+      final zip = _chatboxZipWithSession({
+        'id': 'bbbbbbbb-cccc-dddd-eeee-ffff00001111',
+        'name': '\n转生游戏',
+        'messages': [
+          {
+            'role': 'user',
+            'contentParts': [
+              {'type': 'text', 'text': '你好'},
+            ],
+            'timestamp': 1700000000000,
+          },
+        ],
+      });
+      final chatbox = BackupService.parseChatboxZip(zip);
+      expect(chatbox.sessions.single.title, '转生游戏');
+
+      final mapped = BackupService.mapChatboxToBackup(chatbox, const []);
+      expect(mapped.conversations.single.title, '转生游戏');
+    });
+
+    test('会话 name/threadName 为空时回退 topics 首个标题', () {
+      final zip = _chatboxZipWithSession({
+        'id': 'bbbbbbbb-cccc-dddd-eeee-ffff00001111',
+        'messages': [
+          {
+            'role': 'user',
+            'contentParts': [
+              {'type': 'text', 'text': '你好'},
+            ],
+            'timestamp': 1700000000000,
+          },
+        ],
+        'topics': [
+          {'title': '话题一', 'messages': []},
+          {'title': '话题二', 'messages': []},
+        ],
+      });
+      final chatbox = BackupService.parseChatboxZip(zip);
+      expect(chatbox.sessions.single.title, '话题一');
+    });
+
+    test('会话标题全空白且无 topics 时回退未命名会话', () {
+      final zip = _chatboxZipWithSession({
+        'id': 'bbbbbbbb-cccc-dddd-eeee-ffff00001111',
+        'name': '   \n  ',
+        'messages': [],
+      });
+      final chatbox = BackupService.parseChatboxZip(zip);
+      expect(chatbox.sessions.single.title, '未命名会话');
     });
   });
 
