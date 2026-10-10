@@ -30,6 +30,13 @@ class AppDatabase {
 
   static final AppDatabase instance = AppDatabase._();
 
+  /// 测试入口：对已打开的数据库执行从 oldVersion 到 newVersion 的完整迁移链，
+  /// 便于在测试中模拟老库升级（onUpgrade 逻辑本身为私有，避免误调用）。
+  static Future<void> runMigrations(
+      Database db, int oldVersion, int newVersion) async {
+    await AppDatabase._()._onUpgrade(db, oldVersion, newVersion);
+  }
+
   Database? _db;
 
   Future<Database> open() async {
@@ -40,7 +47,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 10,
+      version: 11,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -262,6 +269,21 @@ class AppDatabase {
     // version 9 -> 10：api_configs 增加收藏列（R22 模型收藏，收藏项置顶）
     if (oldVersion < 10) {
       await _migrateV10(db);
+    }
+    // version 10 -> 11：messages 增加 duration_ms 列（性能图表耗时统计）
+    if (oldVersion < 11) {
+      await _migrateV11(db);
+    }
+  }
+
+  /// version 10 -> 11 迁移：`messages` 幂等补齐 `duration_ms` 列。
+  /// 对齐 _onCreate 中 version 11 的完整 schema（性能图表按消息耗时聚合，
+  /// 老库升级缺失该列会抛 no such column: duration_ms）。
+  Future<void> _migrateV11(Database db) async {
+    final cols = await db.rawQuery('PRAGMA table_info(messages)');
+    final existing = cols.map((c) => c['name'] as String).toSet();
+    if (!existing.contains('duration_ms')) {
+      await db.execute('ALTER TABLE messages ADD COLUMN duration_ms INTEGER');
     }
   }
 

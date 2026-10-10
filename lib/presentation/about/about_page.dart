@@ -16,6 +16,12 @@ class AboutPage extends StatelessWidget {
   /// 内置更新日志（中文）：最新版本在前，历史版本简列。
   static const List<({String version, String notes})> kChangelog = [
     (
+      version: 'v1.2.17',
+      notes:
+          '修复：暗色模式下提示文字对比度过低不可读；性能图表 no such column: '
+          'duration_ms（数据库 v11 迁移）；手机端会话长按编辑菜单与桌面端一致。',
+    ),
+    (
       version: 'v1.2.16',
       notes:
           '新增：跨会话消息搜索支持标题命中；会话导出 Markdown/PDF（桌面端可选保存目录）；'

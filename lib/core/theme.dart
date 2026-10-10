@@ -295,6 +295,10 @@ abstract final class AppTheme {
       snackBarTheme: SnackBarThemeData(
         backgroundColor:
             isDark ? scheme.surfaceContainerHigh : const Color(0xFF323232),
+        // 暗色模式可读性修复：SnackBar 文字统一白色加粗，
+        // 在深灰/深色背景上均保持高对比，亮暗主题一致可读。
+        contentTextStyle: const TextStyle(
+            color: Colors.white, fontWeight: FontWeight.w500),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
