@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../application/providers/api_configs_provider.dart';
 import '../../application/providers/local_server_provider.dart';
@@ -609,7 +610,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('检查更新暂时失败'),
-        content: Text('$reason\n\n你也可以直接下载最新版 APK 安装。'),
+        content: Text(
+          AppPlatform.isDesktop
+              ? '$reason\n\n你也可以前往 GitHub Releases 页查看最新版本。'
+              : '$reason\n\n你也可以直接下载最新版 APK 安装。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
@@ -622,16 +627,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             },
             child: const Text('重试'),
           ),
-          FilledButton.icon(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _downloadDirectLatest();
-            },
-            icon: const Icon(Icons.download),
-            label: const Text('下载最新版'),
-          ),
+          if (AppPlatform.isDesktop)
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _openReleasePage();
+              },
+              icon: const Icon(Icons.open_in_browser),
+              label: const Text('前往 Releases 页'),
+            )
+          else
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _downloadDirectLatest();
+              },
+              icon: const Icon(Icons.download),
+              label: const Text('下载最新版'),
+            ),
         ],
       ),
+    );
+  }
+
+  /// 桌面端：打开 GitHub Releases 最新版本页（dmg 由用户经浏览器下载安装）。
+  void _openReleasePage() {
+    launchUrl(
+      Uri.parse('https://github.com/3310zx/talkroom/releases/latest'),
+      mode: LaunchMode.externalApplication,
     );
   }
 

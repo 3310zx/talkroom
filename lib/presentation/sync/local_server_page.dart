@@ -107,12 +107,21 @@ class _LocalServerPageState extends ConsumerState<LocalServerPage> {
         leading: const Icon(Icons.dns, size: 40, color: Colors.green),
         title: Text('运行中 · 端口 ${status.port}'),
         subtitle: Text(
-          '启动时间：${status.startedAt?.toLocal() ?? '--'}'
+          '启动时间：${_formatDateTime(status.startedAt)}'
           '\n已配对设备：${status.pairedDevices} 台'
           '${status.pairLocked ? '\n⚠️ 配对码已锁定（错误次数过多）' : ''}',
         ),
       ),
     );
+  }
+
+  /// 将时间格式化为「yyyy-MM-dd HH:mm:ss」，避免 toLocal() 直出带微秒。
+  String _formatDateTime(DateTime? dt) {
+    if (dt == null) return '--';
+    final l = dt.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${l.year}-${two(l.month)}-${two(l.day)} '
+        '${two(l.hour)}:${two(l.minute)}:${two(l.second)}';
   }
 
   Widget _pairInfoTile(dynamic status) {
@@ -133,7 +142,7 @@ class _LocalServerPageState extends ConsumerState<LocalServerPage> {
                 Text(
                   pairCode == null || pairCode.isEmpty
                       ? '未生成配对码'
-                      : '配对码：${pairCode[0]} ${pairCode[1]} ${pairCode[2]} ${pairCode[3]} ${pairCode[4]} ${pairCode[5]}',
+                      : '配对码：${pairCode.split('').join(' ')}',
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         letterSpacing: 4,
                         fontFeatures: const [FontFeature.tabularFigures()],
@@ -238,14 +247,9 @@ class _LocalServerPageState extends ConsumerState<LocalServerPage> {
                 borderRadius: BorderRadius.circular(12),
               ),
               padding: const EdgeInsets.all(8),
-              child: QrImageView(
-                data: payload,
-                version: QrVersions.auto,
-                size: 164,
-                eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square),
-                dataModuleStyle:
-                    const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square),
-              ),
+              // macOS 下 QrImageView 的 CustomPaint 存在渲染空白问题，
+              // 改为用 QrPainter 预渲染 PNG 再以 Image.memory 展示。
+              child: _QrImage(data: payload, size: 164),
             ),
             const SizedBox(height: 12),
             const Text('手机端点击「扫码配对」扫描此二维码，即可自动填入 IP、端口与配对码'),
@@ -273,8 +277,18 @@ class _LocalServerPageState extends ConsumerState<LocalServerPage> {
   }
 
   Future<void> _startServer() async {
-    setState(() => _starting = true);
     final service = ref.read(localServerServiceProvider);
+    // UI 层防重入：服务器已在运行（含自动拉起已启动）时直接刷新状态，
+    // 避免与现有实例重复 bind 8787。
+    if (service.isRunning) {
+      await _refreshStatus();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('本地服务器已在运行')),
+      );
+      return;
+    }
+    setState(() => _starting = true);
     try {
       final settings = ref.read(settingsProvider);
       final lastPort =
@@ -363,6 +377,87 @@ class _LocalServerPageState extends ConsumerState<LocalServerPage> {
       pairRemainingLockMs: info['pair_remaining_lock_ms'] as int? ?? 0,
     );
     ref.invalidate(localServerDevicesProvider);
+  }
+}
+
+/// 二维码图片组件：用 QrPainter 预渲染 PNG 后以 Image.memory 展示。
+///
+/// 不使用 QrImageView 的原因是：qr_flutter 4.x 的 QrImageView 在 macOS
+/// 桌面端（CustomPaint 绘制路径）存在静默空白问题，而 PNG 图片渲染稳定。
+class _QrImage extends StatefulWidget {
+  const _QrImage({required this.data, required this.size});
+
+  final String data;
+  final double size;
+
+  @override
+  State<_QrImage> createState() => _QrImageState();
+}
+
+class _QrImageState extends State<_QrImage> {
+  Future<Uint8List?>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _render();
+  }
+
+  @override
+  void didUpdateWidget(covariant _QrImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.data != widget.data) {
+      _future = _render();
+    }
+  }
+
+  Future<Uint8List?> _render() async {
+    try {
+      final painter = QrPainter(
+        data: widget.data,
+        version: QrVersions.auto,
+        gapless: true,
+        eyeStyle:
+            const QrEyeStyle(eyeShape: QrEyeShape.square, color: Colors.black),
+        dataModuleStyle: const QrDataModuleStyle(
+          dataModuleShape: QrDataModuleShape.square,
+          color: Colors.black,
+        ),
+      );
+      final bytes = await painter.toImageData(widget.size);
+      if (bytes == null || bytes.lengthInBytes == 0) return null;
+      return bytes.buffer.asUint8List();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List?>(
+      future: _future,
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes == null || bytes.isEmpty) {
+          return Center(
+            child: Text(
+              '二维码生成失败',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+            ),
+          );
+        }
+        return Image.memory(
+          bytes,
+          width: widget.size,
+          height: widget.size,
+          fit: BoxFit.contain,
+          gaplessPlayback: true,
+        );
+      },
+    );
   }
 }
 

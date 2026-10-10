@@ -542,7 +542,8 @@ class _ApiConfigDetailPageState extends ConsumerState<ApiConfigDetailPage> {
         );
         await notifier.update(updated, apiKey: apiKey.isEmpty ? null : apiKey);
       } else {
-        final refKey = ApiKeyStore.refKeyFor(now % 100000);
+        // 唯一 refKey：避免秒级取模碰撞导致同秒多配置 Keychain 覆盖。
+        final refKey = ApiKeyStore.generateRefKey();
         final config = ApiConfig(
           name: name,
           baseUrl: baseUrl,

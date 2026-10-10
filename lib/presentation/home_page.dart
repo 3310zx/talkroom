@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../application/providers/active_task_scheduler_provider.dart';
 import '../application/providers/active_tasks_provider.dart';
@@ -11,10 +12,14 @@ import '../application/providers/settings_provider.dart';
 import '../application/providers/sync_provider.dart';
 import '../application/providers/ui_state_provider.dart';
 import '../core/constants.dart';
+import '../core/platform.dart';
+import '../services/update_service.dart';
 import 'chat/chat_detail_panel.dart';
 import 'chat/chat_page.dart';
+import 'menu_commands.dart';
 import 'session_list/session_list_page.dart';
 import 'settings/settings_page.dart';
+import 'sync/local_server_page.dart';
 
 /// 首页：M3 自适应导航骨架。
 ///
@@ -44,6 +49,14 @@ class _HomePageState extends ConsumerState<HomePage> {
   @override
   void initState() {
     super.initState();
+    if (AppPlatform.isMacOS) {
+      MenuCommandBus.register(MenuAction.about, _showAboutDialog);
+      MenuCommandBus.register(MenuAction.settings, _openSettingsFromMenu);
+      MenuCommandBus.register(MenuAction.checkUpdate, _checkUpdateFromMenu);
+      MenuCommandBus.register(
+          MenuAction.newConversation, _newConversationFromMenu);
+      MenuCommandBus.register(MenuAction.openSyncServer, _openSyncServerFromMenu);
+    }
     Future<void>(() async {
       try {
         await ref.read(apiConfigsProvider.notifier).load();
@@ -84,6 +97,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     final settings = ref.read(settingsProvider);
     if (settings[AppConstants.settingServerAutoStart] != '1') return;
     final service = ref.read(localServerServiceProvider);
+    // 防重入：已在运行（如本地服务器页手动启动后返回）时不再重复拉起。
+    if (service.isRunning) return;
     try {
       final lastPort =
           int.tryParse(settings[AppConstants.settingServerLastPort] ?? '') ??
@@ -121,6 +136,114 @@ class _HomePageState extends ConsumerState<HomePage> {
     await engine.startIfEnabled();
     ref.read(syncStatusProvider.notifier).setEnabled(true);
     ref.read(syncStatusProvider.notifier).setConnected(engine.isConnected);
+  }
+
+  @override
+  void dispose() {
+    if (AppPlatform.isMacOS) {
+      MenuCommandBus.unregister(MenuAction.about);
+      MenuCommandBus.unregister(MenuAction.settings);
+      MenuCommandBus.unregister(MenuAction.checkUpdate);
+      MenuCommandBus.unregister(MenuAction.newConversation);
+      MenuCommandBus.unregister(MenuAction.openSyncServer);
+    }
+    super.dispose();
+  }
+
+  // ── macOS 菜单栏命令响应 ────────────────────────────────────────
+
+  void _showAboutDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('关于 LLM Chat'),
+        content: Text(
+          '版本 ${AppConstants.appVersion}\n\n'
+          'AI 聊天客户端（macOS / Android / Web）',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('好'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openSettingsFromMenu() {
+    final width = MediaQuery.of(context).size.width;
+    if (width >= 840) {
+      setState(() => _railSettingsSelected = true);
+      _wideScaffoldKey.currentState?.openDrawer();
+    } else {
+      ref.read(mobileTabProvider.notifier).state = 1;
+    }
+  }
+
+  void _newConversationFromMenu() {
+    ref.read(selectedConversationProvider.notifier).state = null;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('已新建会话')));
+  }
+
+  void _openSyncServerFromMenu() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const LocalServerPage()),
+    );
+  }
+
+  /// 菜单「检查更新」：与设置页一致走 GitHub Releases API，桌面端按钮跳转
+  /// Releases 页（dmg 资产下载）。失败以 SnackBar 提示，不打断当前会话。
+  Future<void> _checkUpdateFromMenu() async {
+    try {
+      final update = await UpdateService().fetchLatestRelease();
+      final current = await UpdateService.currentVersion();
+      if (UpdateService.compareVersions(update.version, current) > 0) {
+        if (!mounted) return;
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text('发现新版本 ${update.version}'),
+            content: SingleChildScrollView(
+              child: Text(
+                update.body.isEmpty ? '暂无更新说明' : update.body,
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('稍后'),
+              ),
+              FilledButton.icon(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  launchUrl(
+                    Uri.parse(
+                      'https://github.com/3310zx/talkroom/releases/latest',
+                    ),
+                    mode: LaunchMode.externalApplication,
+                  );
+                },
+                icon: const Icon(Icons.download),
+                label: const Text('前往 Releases 页'),
+              ),
+            ],
+          ),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text('当前已是最新版本 $current')));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('检查更新失败：$e')));
+    }
   }
 
   @override

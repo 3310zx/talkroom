@@ -35,6 +35,7 @@ class UpdateInfo {
     required this.name,
     required this.body,
     this.apkUrl,
+    this.dmgUrl,
   });
 
   /// 最新版本号（GitHub tag_name，如 v1.0.9）
@@ -45,6 +46,15 @@ class UpdateInfo {
   final String body;
   /// APK 资产下载链接（assets 中第一个 .apk 的 browser_download_url，可为空）
   final String? apkUrl;
+  /// dmg 资产下载链接（macOS 桌面端更新通道：assets 中第一个 .dmg 的
+  /// browser_download_url，可为空）
+  final String? dmgUrl;
+
+  /// 移动端是否可直接下载 APK。
+  bool get hasApk => apkUrl != null && apkUrl!.isNotEmpty;
+
+  /// 桌面端是否可直接下载 dmg。
+  bool get hasDmg => dmgUrl != null && dmgUrl!.isNotEmpty;
 }
 
 /// 检查更新服务：通过 GitHub Releases API 拉取最新版本并与当前版本比对。

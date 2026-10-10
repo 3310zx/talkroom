@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:speech_to_text/speech_to_text.dart';
@@ -16,6 +18,7 @@ import '../../application/providers/settings_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
 import '../../core/constants.dart';
 import '../../core/file_io.dart' as file_io;
+import '../../core/platform.dart';
 import '../../core/utils.dart';
 import '../../data/secure_storage/api_key_store.dart';
 import '../../domain/models/api_config.dart';
@@ -937,10 +940,54 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   /// 相册选图：读取原图并压缩为 Base64 图片附件（OpenAI image_url 兼容）。
   ///
+  /// 平台化：桌面端无系统相册概念，改用 file_picker 选择本地图片文件，
+  /// 并在读盘前先按路径取真实大小做上限预检，避免把超大文件整读进内存；
+  /// 移动端保留 ImagePicker 相册（含压缩参数）。
+  ///
   /// L5：压缩后仍校验字节上限，超过 20MB 拒绝并提示，防止超大图
   /// 以 Base64 形式膨胀请求体。
   Future<void> _pickImageFromGallery() async {
     try {
+      if (AppPlatform.isDesktop) {
+        final result = await FilePicker.platform.pickFiles(
+          type: FileType.image,
+          allowMultiple: false,
+        );
+        if (result == null || result.files.isEmpty) return;
+        final picked = result.files.single;
+        final path = picked.path;
+        if (path == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(const SnackBar(content: Text('选择图片失败：无法读取文件路径')));
+          }
+          return;
+        }
+        final file = File(path);
+        // 读盘前先按文件大小预检，避免超大文件整读进内存
+        final sizeError = ChatPage.checkAttachmentSize(await file.length());
+        if (sizeError != null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(SnackBar(content: Text(sizeError)));
+          }
+          return;
+        }
+        final bytes = await file.readAsBytes();
+        if (!mounted) return;
+        setState(() {
+          _pendingAttachments.add(MessageAttachment(
+            type: 'image',
+            name: picked.name,
+            mimeType: 'image/${_imageExtToMime(picked.name)}',
+            sizeBytes: bytes.length,
+            dataBase64: base64Encode(bytes),
+          ));
+        });
+        return;
+      }
       final picked = await ImagePicker().pickImage(
         source: ImageSource.gallery,
         maxWidth: 2048,
@@ -974,6 +1021,25 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(content: Text('选择图片失败：$e')));
       }
+    }
+  }
+
+  /// 由文件名推断图片 MIME 子类型（桌面 file_picker 路径无统一 MIME）。
+  String _imageExtToMime(String name) {
+    final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+    switch (ext) {
+      case 'png':
+        return 'png';
+      case 'gif':
+        return 'gif';
+      case 'webp':
+        return 'webp';
+      case 'bmp':
+        return 'bmp';
+      case 'svg':
+        return 'svg+xml';
+      default:
+        return 'jpeg';
     }
   }
 

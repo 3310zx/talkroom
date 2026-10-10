@@ -52,6 +52,11 @@ class LocalServerService {
   bool _stopping = false;
   Timer? _finalizeTimer;
 
+  /// 防重入：正在启动过程中再次调用 start() 时复用同一 Future，
+  /// 避免并发启动对同一 (0.0.0.0, port) 重复 bind 触发
+  /// SocketException: shared flag to bind() needs to be 'true'。
+  Future<void>? _startFuture;
+
   /// 电脑端（权威源）设备 id；首次调用时生成并持久化。
   Future<String> getOrCreateServerDeviceId() async {
     final existing = await _settings.getValue(AppConstants.settingServerDeviceId);
@@ -142,8 +147,22 @@ class LocalServerService {
   int get port => _httpServer?.port ?? 0;
 
   /// 启动服务器（HTTP + WebSocket 同一端口）。
-  Future<void> start({int port = AppConstants.defaultServerPort}) async {
+  ///
+  /// 幂等：已运行或正在启动中时直接复用，不重复 bind；
+  /// 从根源避免「应用启动自动拉起」与「页面手动启动」并发时
+  /// 对同一 (0.0.0.0, 8787) 重复监听触发 SocketException。
+  Future<void> start({int port = AppConstants.defaultServerPort}) {
+    if (isRunning) return Future<void>.value();
+    return _startFuture ??= _doStart(port).whenComplete(() => _startFuture = null);
+  }
+
+  Future<void> _doStart(int port) async {
     final server = await HttpServer.bind(InternetAddress.anyIPv4, port);
+    if (_stopping) {
+      // start 与 stop 并发：本次 bind 期间已被要求停止，直接关闭避免悬挂服务器。
+      await server.close(force: true);
+      return;
+    }
     _httpServer = server;
     _stopping = false;
     server.listen(_onRequest);
@@ -191,9 +210,14 @@ class LocalServerService {
     req.headers.forEach((k, v) => headers[k] = v.join(','));
 
     try {
+      // shelf 的 Request 要求绝对 URI，而 dart:io HttpRequest.uri 是相对路径
+      // （如 /health），需基于 Host 头拼成绝对地址，否则所有请求都会抛
+      // "Invalid argument (requestedUri): must be an absolute URL"。
+      final rawHost = req.headers.value(HttpHeaders.hostHeader) ?? 'localhost';
+      final absoluteUri = Uri.parse('http://$rawHost${req.uri}');
       final shelfReq = Request(
         req.method,
-        req.uri,
+        absoluteUri,
         body: req,
         headers: headers,
       );
