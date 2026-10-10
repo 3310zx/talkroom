@@ -9,10 +9,15 @@ abstract class MessageRepository {
   /// 跨会话全文搜索（R12，v1.0.15）：按关键词模糊匹配消息内容，
   /// 返回命中消息及其所属会话（按会话更新时间倒序、消息时间倒序），
   /// 供全局搜索页展示与跳转定位。
+  /// v1.2.16（R18）：同时模糊匹配会话标题（标题命中时消息 content 为空）。
   Future<List<MessageSearchHit>> searchMessages(
     String keyword, {
     int limit = 100,
   });
+
+  /// R19：拉取最近 N 条已完成的助手回复，用于性能图表
+  /// （请求耗时 / Token 用量统计）。
+  Future<List<ChatMessage>> listPerformanceStats({int limit = 30});
 
   Future<ChatMessage?> getById(int id);
   Future<int> insert(ChatMessage message);

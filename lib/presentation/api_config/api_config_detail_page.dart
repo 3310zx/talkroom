@@ -48,6 +48,9 @@ class _ApiConfigDetailPageState extends ConsumerState<ApiConfigDetailPage> {
   bool _checking = false;
   bool _fetching = false;
 
+  /// R22：是否收藏（收藏项在配置列表顶部展示，便于快速切换）。
+  bool _favorite = false;
+
   bool get _isEdit => widget.existing != null;
 
   @override
@@ -62,6 +65,7 @@ class _ApiConfigDetailPageState extends ConsumerState<ApiConfigDetailPage> {
     _apiKeyController = TextEditingController();
     _models = List.of(existing?.modelIds ?? preset?.modelIds ?? const []);
     _originalModels = List.of(_models);
+    _favorite = existing?.favorite ?? false;
     _loadExistingKey(existing);
   }
 
@@ -103,6 +107,15 @@ class _ApiConfigDetailPageState extends ConsumerState<ApiConfigDetailPage> {
           _sectionLabel(context, 'API 密钥'),
           _buildApiKeyRow(context),
           const SizedBox(height: 16),
+          // R22：收藏开关，收藏项在列表顶部展示便于快速切换。
+          SwitchListTile(
+            title: const Text('收藏此服务商'),
+            subtitle: const Text('收藏后在模型配置列表顶部展示，便于快速切换'),
+            value: _favorite,
+            contentPadding: EdgeInsets.zero,
+            onChanged: (v) => setState(() => _favorite = v),
+          ),
+          const SizedBox(height: 8),
           _buildModelSection(context),
           const SizedBox(height: 8),
           Text(
@@ -539,6 +552,7 @@ class _ApiConfigDetailPageState extends ConsumerState<ApiConfigDetailPage> {
           name: name,
           baseUrl: baseUrl,
           modelIds: _models,
+          favorite: _favorite,
         );
         await notifier.update(updated, apiKey: apiKey.isEmpty ? null : apiKey);
       } else {
@@ -549,6 +563,7 @@ class _ApiConfigDetailPageState extends ConsumerState<ApiConfigDetailPage> {
           baseUrl: baseUrl,
           apiKeyRef: refKey,
           modelIds: _models,
+          favorite: _favorite,
           createdAt: now,
           updatedAt: now,
         );

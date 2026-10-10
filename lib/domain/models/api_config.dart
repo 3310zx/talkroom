@@ -6,6 +6,8 @@ class ApiConfig {
   final String apiKeyRef;
   final List<String> modelIds;
   final bool enabled;
+  // R22：模型收藏标记（列表页置顶展示，便于快速切换）。
+  final bool favorite;
   final int createdAt;
   final int updatedAt;
 
@@ -16,6 +18,7 @@ class ApiConfig {
     required this.apiKeyRef,
     required this.modelIds,
     this.enabled = true,
+    this.favorite = false,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -27,6 +30,7 @@ class ApiConfig {
     String? apiKeyRef,
     List<String>? modelIds,
     bool? enabled,
+    bool? favorite,
     int? createdAt,
     int? updatedAt,
   }) {
@@ -37,6 +41,7 @@ class ApiConfig {
       apiKeyRef: apiKeyRef ?? this.apiKeyRef,
       modelIds: modelIds ?? this.modelIds,
       enabled: enabled ?? this.enabled,
+      favorite: favorite ?? this.favorite,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -50,6 +55,7 @@ class ApiConfig {
       'api_key_ref': apiKeyRef,
       'model_ids': _encodeModelIds(modelIds),
       'enabled': enabled ? 1 : 0,
+      'favorite': favorite ? 1 : 0,
       'created_at': createdAt,
       'updated_at': updatedAt,
     };
@@ -63,6 +69,7 @@ class ApiConfig {
       apiKeyRef: map['api_key_ref'] as String? ?? '',
       modelIds: _decodeModelIds(map['model_ids'] as String?),
       enabled: (map['enabled'] as int? ?? 1) == 1,
+      favorite: (map['favorite'] as int? ?? 0) == 1,
       createdAt: map['created_at'] as int? ?? 0,
       updatedAt: map['updated_at'] as int? ?? 0,
     );

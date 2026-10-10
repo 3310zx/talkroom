@@ -15,8 +15,10 @@ import '../../core/utils.dart';
 import '../../services/apk_downloader.dart';
 import '../../services/update_service.dart';
 import '../active_tasks/active_tasks_page.dart';
+import '../about/about_page.dart';
 import '../api_config/api_config_list_page.dart';
 import '../cache_hits/cache_hits_page.dart';
+import '../performance/performance_stats_page.dart';
 import '../prompt_templates/prompt_templates_page.dart';
 import '../sync/local_server_page.dart';
 import '../sync/sync_setup_page.dart';
@@ -183,6 +185,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               MaterialPageRoute(builder: (_) => const CacheHitsPage()),
             ),
           ),
+          ListTile(
+            leading: const Icon(Icons.bar_chart),
+            title: const Text('性能图表'),
+            subtitle: const Text('最近请求耗时与 Token 用量统计（柱状图）'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const PerformanceStatsPage()),
+            ),
+          ),
 
           const Divider(),
           _sectionHeader('参数设置'),
@@ -215,6 +226,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
           const Divider(),
           _sectionHeader('关于'),
+          // R21：关于页入口（版本号、更新日志、开源信息、GitHub Releases）。
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('关于 LLM Chat'),
+            subtitle: Text('版本 $_currentVersion · 更新日志 · 开源信息'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const AboutPage()),
+            ),
+          ),
           ListTile(
             leading: const Icon(Icons.system_update_alt_outlined),
             title: const Text('检查更新'),

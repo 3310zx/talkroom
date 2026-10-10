@@ -140,4 +140,18 @@ class ApiConfigsNotifier extends StateNotifier<List<ApiConfig>> {
       rethrow;
     }
   }
+
+  /// R22：切换服务商收藏标记。收藏项在列表顶部展示（仓储按
+  /// favorite DESC, updated_at DESC 排序），便于快速切换。
+  Future<void> toggleFavorite(ApiConfig config) async {
+    try {
+      await _repository.update(
+        config.copyWith(favorite: !config.favorite),
+      );
+      await load();
+    } catch (e, st) {
+      debugPrint('ApiConfigsNotifier.toggleFavorite failed: $e\n$st');
+      rethrow;
+    }
+  }
 }

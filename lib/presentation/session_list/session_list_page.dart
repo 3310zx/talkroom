@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/providers/conversations_provider.dart';
+import '../../application/providers/database_provider.dart';
 import '../../application/providers/messages_provider.dart';
 import '../../application/providers/prompt_templates_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
 import '../../core/theme.dart';
 import '../../core/utils.dart';
 import '../../domain/models/conversation.dart';
+import '../../services/conversation_exporter_io.dart';
 import '../search/global_search_page.dart';
 import 'archive_conversations_page.dart';
 
@@ -29,6 +31,10 @@ class SessionListPage extends ConsumerStatefulWidget {
 class _SessionListPageState extends ConsumerState<SessionListPage> {
   final TextEditingController _searchController = TextEditingController();
   String _keyword = '';
+
+  /// R17 批量导出：导出选择模式与选中的会话 ID 集合。
+  bool _exportMode = false;
+  final Set<int> _selectedIds = {};
 
   @override
   void dispose() {
@@ -54,21 +60,46 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('LLM Chat'),
+        title: Text(_exportMode ? '选择会话导出' : 'LLM Chat'),
         actions: [
-          // R12：跨会话全文搜索入口。
-          IconButton(
-            icon: const Icon(Icons.search),
-            tooltip: '搜索聊天记录',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const GlobalSearchPage()),
+          // R17：批量导出选择模式（导出所选会话为 Markdown / PDF）。
+          if (_exportMode) ...[
+            TextButton(
+              onPressed: _selectedIds.isEmpty ? null : _exportSelected,
+              child: Text('导出（${_selectedIds.length}）'),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: '新建会话',
-            onPressed: () => _createConversation(ref),
-          ),
+            TextButton(
+              onPressed: () => setState(() {
+                _exportMode = false;
+                _selectedIds.clear();
+              }),
+              child: const Text('取消'),
+            ),
+          ] else ...[
+            // R12：跨会话全文搜索入口。
+            IconButton(
+              icon: const Icon(Icons.search),
+              tooltip: '搜索聊天记录',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const GlobalSearchPage()),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.file_download_outlined),
+              tooltip: '导出会话',
+              onPressed: active.isEmpty
+                  ? null
+                  : () => setState(() {
+                        _exportMode = true;
+                        _selectedIds.clear();
+                      }),
+            ),
+            IconButton(
+              icon: const Icon(Icons.add),
+              tooltip: '新建会话',
+              onPressed: () => _createConversation(ref),
+            ),
+          ],
         ],
       ),
       body: Column(
@@ -141,13 +172,40 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            onTap: () => _selectConversation(ref, conversation),
-                            trailing: PopupMenuButton<String>(
-                              onSelected: (value) =>
-                                  _onMenu(ref, conversation, value),
-                              itemBuilder: (context) =>
-                                  _buildConversationMenuItems(conversation),
-                            ),
+                            onTap: () {
+                              if (_exportMode) {
+                                final id = conversation.id;
+                                if (id == null) return;
+                                setState(() {
+                                  if (!_selectedIds.add(id)) {
+                                    _selectedIds.remove(id);
+                                  }
+                                });
+                                return;
+                              }
+                              _selectConversation(ref, conversation);
+                            },
+                            trailing: _exportMode
+                                ? Checkbox(
+                                    value: _selectedIds
+                                        .contains(conversation.id),
+                                    onChanged: (_) {
+                                      final id = conversation.id;
+                                      if (id == null) return;
+                                      setState(() {
+                                        if (!_selectedIds.add(id)) {
+                                          _selectedIds.remove(id);
+                                        }
+                                      });
+                                    },
+                                  )
+                                : PopupMenuButton<String>(
+                                    onSelected: (value) =>
+                                        _onMenu(ref, conversation, value),
+                                    itemBuilder: (context) =>
+                                        _buildConversationMenuItems(
+                                            conversation),
+                                  ),
                           ),
                           );
                         },
@@ -206,6 +264,29 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
   void _selectConversation(WidgetRef ref, Conversation conversation) {
     ref.read(selectedConversationProvider.notifier).state = conversation;
     ref.read(messagesProvider.notifier).loadForConversation(conversation.id!);
+  }
+
+  /// R17 批量导出：读取选中会话消息后交由导出器生成 Markdown / PDF。
+  Future<void> _exportSelected() async {
+    final conversations = ref.read(conversationsProvider);
+    final items = <ConversationExportItem>[];
+    for (final conversation in conversations) {
+      final id = conversation.id;
+      if (id == null || !_selectedIds.contains(id)) continue;
+      final messages = await ref
+          .read(appDatabaseProvider)
+          .messageRepository
+          .listByConversation(id);
+      items.add(
+        ConversationExportItem(conversation: conversation, messages: messages),
+      );
+    }
+    if (!mounted) return;
+    setState(() {
+      _exportMode = false;
+      _selectedIds.clear();
+    });
+    await ConversationExporter.exportConversations(context, items);
   }
 
   /// R14 会话操作菜单项：三点按钮菜单与长按/右键菜单共用。

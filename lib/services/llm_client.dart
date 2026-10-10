@@ -49,6 +49,7 @@ class LlmStreamResult {
     this.promptTokens,
     this.completionTokens,
     this.cachedTokens,
+    this.durationMs,
   });
 
   /// 正文（不含思维链）
@@ -68,6 +69,9 @@ class LlmStreamResult {
 
   /// 缓存命中 token（usage.prompt_tokens_details.cached_tokens）
   final int? cachedTokens;
+
+  /// R19：请求总耗时（毫秒，请求发出到流结束）。
+  final int? durationMs;
 }
 
 /// LLM 客户端（OpenAI 兼容 `/chat/completions`，SSE 流式）。
@@ -273,6 +277,7 @@ class LlmClient {
     double? frequencyPenalty,
     double? presencePenalty,
   }) async {
+    final requestStartedAt = DateTime.now();
     final Response<dynamic> response;
     try {
       response = await _dio.post<dynamic>(
@@ -326,6 +331,8 @@ class LlmClient {
     }
     final text = content is String ? content : '';
     final reasoningText = reasoning is String ? reasoning : '';
+    final durationMs =
+        DateTime.now().difference(requestStartedAt).inMilliseconds;
     // usage 缺失时按字符数估算；prompt_tokens 无输入文本信息无法估算。
     return LlmStreamResult(
       content: text,
@@ -336,6 +343,7 @@ class LlmClient {
       promptTokens: promptTokens,
       completionTokens: completionTokens ?? (text.isEmpty ? null : (text.length / 4).ceil()),
       cachedTokens: cachedTokens,
+      durationMs: durationMs,
     );
   }
 

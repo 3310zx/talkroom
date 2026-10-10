@@ -10,9 +10,10 @@ class ApiConfigRepositoryImpl implements ApiConfigRepository {
 
   @override
   Future<List<ApiConfig>> getAll() async {
+    // R22：收藏项置顶（favorite DESC），其余按更新时间倒序。
     final rows = await _appDatabase.db.query(
       'api_configs',
-      orderBy: 'updated_at DESC',
+      orderBy: 'favorite DESC, updated_at DESC',
     );
     return rows.map(ApiConfig.fromMap).toList();
   }

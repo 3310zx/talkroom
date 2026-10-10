@@ -40,7 +40,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 9,
+      version: 10,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -72,6 +72,7 @@ class AppDatabase {
         api_key_ref TEXT NOT NULL,
         model_ids   TEXT NOT NULL,
         enabled     INTEGER NOT NULL DEFAULT 1,
+        favorite    INTEGER NOT NULL DEFAULT 0,
         created_at  INTEGER NOT NULL,
         updated_at  INTEGER NOT NULL
       )
@@ -115,7 +116,8 @@ class AppDatabase {
         reasoning_content   TEXT,
         reasoning_duration_ms INTEGER,
         reasoning_tokens    INTEGER,
-        cached_tokens       INTEGER
+        cached_tokens       INTEGER,
+        duration_ms         INTEGER
       )
     ''');
     await db.execute('CREATE INDEX idx_messages_conv ON messages(conversation_id, created_at)');
@@ -256,6 +258,21 @@ class AppDatabase {
     // 才能让已处于 version 8 的库再次触发迁移。
     if (oldVersion < 9) {
       await _migrateV9(db);
+    }
+    // version 9 -> 10：api_configs 增加收藏列（R22 模型收藏，收藏项置顶）
+    if (oldVersion < 10) {
+      await _migrateV10(db);
+    }
+  }
+
+  /// version 9 -> 10 迁移：`api_configs` 幂等补齐收藏列（R22）。
+  /// 收藏项在配置列表顶部展示（favorite DESC），便于快速切换。
+  Future<void> _migrateV10(Database db) async {
+    final cols = await db.rawQuery('PRAGMA table_info(api_configs)');
+    final existing = cols.map((c) => c['name'] as String).toSet();
+    if (!existing.contains('favorite')) {
+      await db.execute(
+          'ALTER TABLE api_configs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0');
     }
   }
 

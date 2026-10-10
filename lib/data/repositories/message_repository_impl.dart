@@ -30,6 +30,8 @@ class MessageRepositoryImpl implements MessageRepository {
     final kw = keyword.trim();
     if (kw.isEmpty) return const [];
     final pattern = '%$kw%';
+    // R18 补充：同时匹配会话标题与消息内容（会话标题命中时 content 为空，
+    // 由 UI 显示「会话标题匹配」）。
     final rows = await _appDatabase.db.rawQuery(
       '''
       SELECT m.id AS m_id, m.conversation_id, m.role, m.content, m.content_type,
@@ -39,11 +41,12 @@ class MessageRepositoryImpl implements MessageRepository {
              c.title AS conv_title
       FROM messages m
       JOIN conversations c ON c.id = m.conversation_id
-      WHERE m.content LIKE ? AND m.content IS NOT NULL AND m.content != ''
+      WHERE (m.content LIKE ? AND m.content IS NOT NULL AND m.content != '')
+         OR c.title LIKE ?
       ORDER BY m.created_at DESC, m.id DESC
       LIMIT ?
       ''',
-      [pattern, limit],
+      [pattern, pattern, limit],
     );
     return rows.map((row) {
       final msg = ChatMessage.fromMap({
@@ -70,6 +73,32 @@ class MessageRepositoryImpl implements MessageRepository {
         conversationTitle: row['conv_title'] as String? ?? '新会话',
       );
     }).toList();
+  }
+
+  @override
+  Future<List<ChatMessage>> listPerformanceStats({int limit = 30}) async {
+    // R19：取最近 N 条已完成的助手回复，供性能图表展示耗时与 Token 用量。
+    final rows = await _appDatabase.db.query(
+      'messages',
+      columns: [
+        'id',
+        'conversation_id',
+        'role',
+        'content',
+        'content_type',
+        'status',
+        'model_id',
+        'prompt_tokens',
+        'completion_tokens',
+        'cached_tokens',
+        'created_at',
+        'duration_ms',
+      ],
+      where: "role = 'assistant' AND status = 'done'",
+      orderBy: 'created_at DESC, id DESC',
+      limit: limit,
+    );
+    return rows.map(ChatMessage.fromMap).toList();
   }
 
   @override

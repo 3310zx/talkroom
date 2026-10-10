@@ -163,6 +163,7 @@ class ChatMessage {
   final int? reasoningDurationMs; // 思考耗时（请求发出到首个正文 token）
   final int? reasoningTokens; // 思考消耗 token（usage 或估算）
   final int? cachedTokens; // 缓存命中 token（prompt_tokens_details.cached_tokens）
+  final int? durationMs; // 请求总耗时（毫秒，R19 性能统计）
 
   // 局域网同步字段（PRD 第 7 章 7.4.2；未启用同步时为 null / 0，兼容单机旧数据）：
   final String? deviceId; // 产生该消息的设备 UUID
@@ -186,6 +187,7 @@ class ChatMessage {
     this.reasoningDurationMs,
     this.reasoningTokens,
     this.cachedTokens,
+    this.durationMs,
     this.deviceId,
     this.serverId,
     this.updatedAt,
@@ -208,6 +210,7 @@ class ChatMessage {
     int? reasoningDurationMs,
     int? reasoningTokens,
     int? cachedTokens,
+    int? durationMs,
     String? deviceId,
     int? serverId,
     int? updatedAt,
@@ -229,6 +232,7 @@ class ChatMessage {
       reasoningDurationMs: reasoningDurationMs ?? this.reasoningDurationMs,
       reasoningTokens: reasoningTokens ?? this.reasoningTokens,
       cachedTokens: cachedTokens ?? this.cachedTokens,
+      durationMs: durationMs ?? this.durationMs,
       deviceId: deviceId ?? this.deviceId,
       serverId: serverId ?? this.serverId,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -277,6 +281,7 @@ class ChatMessage {
       reasoningDurationMs: map['reasoning_duration_ms'] as int?,
       reasoningTokens: map['reasoning_tokens'] as int?,
       cachedTokens: map['cached_tokens'] as int?,
+      durationMs: map['duration_ms'] as int?,
       deviceId: map['device_id'] as String?,
       serverId: map['server_id'] as int?,
       updatedAt: map['updated_at'] as int?,

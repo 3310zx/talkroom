@@ -801,6 +801,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         reasoningDurationMs: result.reasoningDurationMs,
         reasoningTokens: result.reasoningTokens,
         cachedTokens: result.cachedTokens,
+        durationMs: result.durationMs,
         createdAt: now + 1,
       ));
       if (result.cachedTokens != null || result.promptTokens != null) {

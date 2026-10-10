@@ -14,6 +14,7 @@ import '../application/providers/ui_state_provider.dart';
 import '../core/constants.dart';
 import '../core/platform.dart';
 import '../services/update_service.dart';
+import 'about/about_page.dart';
 import 'chat/chat_detail_panel.dart';
 import 'chat/chat_page.dart';
 import 'menu_commands.dart';
@@ -82,6 +83,9 @@ class _HomePageState extends ConsumerState<HomePage> {
     final settings = ref.read(settingsProvider);
     if (settings[AppConstants.settingStartupBehavior] !=
         AppConstants.startupBehaviorLast) {
+      // R18：非“回到上次会话”模式时，冷启动/进入主界面直接进入新会话
+      // 状态（聊天页在无选中会话时输入即自动创建新会话）。
+      ref.read(selectedConversationProvider.notifier).state = null;
       return;
     }
     final conversations = ref.read(conversationsProvider);
@@ -152,22 +156,11 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   // ── macOS 菜单栏命令响应 ────────────────────────────────────────
 
+  /// R21：macOS 菜单「关于」跳转关于页（版本号、更新日志、开源信息、
+  /// GitHub Releases 跳转），替代旧版简单弹窗。
   void _showAboutDialog() {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('关于 LLM Chat'),
-        content: Text(
-          '版本 ${AppConstants.appVersion}\n\n'
-          'AI 聊天客户端（macOS / Android / Web）',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('好'),
-          ),
-        ],
-      ),
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AboutPage()),
     );
   }
 

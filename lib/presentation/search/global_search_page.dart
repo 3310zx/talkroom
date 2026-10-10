@@ -162,7 +162,7 @@ class _GlobalSearchPageState extends ConsumerState<GlobalSearchPage> {
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
           ),
           subtitle: Text(
-            hit.message.content,
+            hit.message.content.isEmpty ? '（会话标题匹配）' : hit.message.content,
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),

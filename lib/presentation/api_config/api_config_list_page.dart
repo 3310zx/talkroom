@@ -42,6 +42,10 @@ class ApiConfigListPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final apiConfigs = ref.watch(apiConfigsProvider);
     final colorScheme = Theme.of(context).colorScheme;
+    // R22：收藏项置顶展示（仓储已按 favorite DESC 排序，这里再分组标头）。
+    final favorites = apiConfigs.where((c) => c.favorite).toList();
+    final showFavoriteHeader = favorites.isNotEmpty;
+    final itemCount = apiConfigs.length + (showFavoriteHeader ? 1 : 0);
 
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
@@ -50,49 +54,96 @@ class ApiConfigListPage extends ConsumerWidget {
           Expanded(
             child: apiConfigs.isEmpty
                 ? _buildEmpty(context)
-                : ListView.separated(
+                : ListView.builder(
                     padding: const EdgeInsets.symmetric(vertical: 4),
-                    itemCount: apiConfigs.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemCount: itemCount,
                     itemBuilder: (context, index) {
-                      final config = apiConfigs[index];
-                      return ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: _colorFor(config.name),
-                          child: Text(
-                            _initialFor(config.name),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
+                      if (showFavoriteHeader && index == 0) {
+                        return Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                          child: Row(
+                            children: [
+                              Icon(Icons.star,
+                                  size: 16, color: Colors.amber.shade700),
+                              const SizedBox(width: 6),
+                              Text(
+                                '收藏',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelLarge
+                                    ?.copyWith(
+                                      color:
+                                          Theme.of(context).colorScheme.primary,
+                                    ),
+                              ),
+                            ],
                           ),
-                        ),
-                        title: Text(config.name),
-                        subtitle: Text(
-                          config.baseUrl,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (config.enabled)
-                              Container(
-                                width: 8,
-                                height: 8,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFF07C160),
-                                  shape: BoxShape.circle,
+                        );
+                      }
+                      final itemIndex =
+                          showFavoriteHeader ? index - 1 : index;
+                      final config = apiConfigs[itemIndex];
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Divider(height: 1),
+                          ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: _colorFor(config.name),
+                              child: Text(
+                                _initialFor(config.name),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
                                 ),
                               ),
-                            const SizedBox(width: 10),
-                            Icon(
-                              Icons.chevron_right,
-                              color: colorScheme.onSurfaceVariant,
                             ),
-                          ],
-                        ),
-                        onTap: () => _openDetail(context, config),
+                            title: Text(config.name),
+                            subtitle: Text(
+                              config.baseUrl,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: Icon(
+                                    config.favorite
+                                        ? Icons.star
+                                        : Icons.star_border,
+                                    color: config.favorite
+                                        ? Colors.amber.shade700
+                                        : colorScheme.onSurfaceVariant,
+                                  ),
+                                  tooltip: config.favorite
+                                      ? '取消收藏'
+                                      : '收藏（置顶展示）',
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: () => ref
+                                      .read(apiConfigsProvider.notifier)
+                                      .toggleFavorite(config),
+                                ),
+                                if (config.enabled) ...[
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFF07C160),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                ],
+                                Icon(
+                                  Icons.chevron_right,
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                              ],
+                            ),
+                            onTap: () => _openDetail(context, config),
+                          ),
+                        ],
                       );
                     },
                   ),

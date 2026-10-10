@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
@@ -8,8 +9,20 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:share_plus/share_plus.dart';
 
+import '../core/platform.dart';
 import '../domain/models/conversation.dart';
 import '../domain/models/message.dart';
+
+/// 单个待导出会话及其消息（批量导出用）。
+class ConversationExportItem {
+  const ConversationExportItem({
+    required this.conversation,
+    required this.messages,
+  });
+
+  final Conversation conversation;
+  final List<ChatMessage> messages;
+}
 
 /// 会话导出（R11，v1.0.15；v1.0.18 修复导出失败与内存问题）。
 ///
@@ -87,14 +100,77 @@ class ConversationExporter {
       // M6：超过规模上限时自动分卷导出，不再抛异常拒绝。
       final files = await _buildFiles(conversation, messages, format);
       final volumeSuffix = files.length > 1 ? '（${files.length} 卷）' : '';
-      await Share.shareXFiles(
-        files.map((f) => XFile(f.path)).toList(),
-        subject: '会话导出：${conversation.title}$volumeSuffix',
-        text: '来自 LLM Chat 的会话导出',
+      if (!context.mounted) return;
+      await _shareOrSave(
+        context,
+        files,
+        '会话导出：${conversation.title}$volumeSuffix',
       );
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('导出失败：$e')));
     }
+  }
+
+  /// R17 批量导出所选会话：逐会话生成 Markdown 文件，桌面端选择保存
+  /// 目录，移动端调系统分享/保存面板。
+  static Future<void> exportConversations(
+    BuildContext context,
+    List<ConversationExportItem> items,
+  ) async {
+    if (items.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final allFiles = <File>[];
+      final subjects = <String>[];
+      for (final item in items) {
+        final files = await _buildFiles(
+          item.conversation,
+          item.messages,
+          'markdown',
+        );
+        allFiles.addAll(files);
+        subjects.add('会话导出：${item.conversation.title}');
+      }
+      if (!context.mounted) return;
+      await _shareOrSave(context, allFiles, subjects.join('、'));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('批量导出失败：$e')));
+    }
+  }
+
+  /// 桌面端弹出目录选择并把临时文件复制到目标目录；移动端调系统分享。
+  static Future<void> _shareOrSave(
+    BuildContext context,
+    List<File> files,
+    String subject,
+  ) async {
+    if (AppPlatform.isDesktop) {
+      final dir = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '选择保存目录',
+      );
+      if (dir == null) return;
+      final saved = <String>[];
+      for (final file in files) {
+        final fileName = file.uri.pathSegments.isEmpty
+            ? '导出文件'
+            : file.uri.pathSegments.last;
+        final target = File('$dir/$fileName');
+        await file.copy(target.path);
+        saved.add(target.path);
+      }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已保存 ${saved.length} 个文件到 $dir'),
+          ),
+        );
+      }
+      return;
+    }
+    await Share.shareXFiles(
+      files.map((f) => XFile(f.path)).toList(),
+      subject: subject,
+    );
   }
 
   /// M6：按规模上限把消息拆成若干卷，每卷消息数 ≤ [kMaxMessages] 且
