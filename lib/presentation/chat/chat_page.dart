@@ -110,6 +110,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final Map<int, GlobalKey> _messageKeys = {};
+
+  /// v1.2.18：消息定位 —— 距底部超过该阈值视为「离开最新位置」，
+  /// 此时显示悬浮「回到最新 / 返回上一条」按钮组。
+  static const double _bottomThreshold = 120.0;
+
+  /// 当前是否位于底部（最新消息）附近；为 false 时展示悬浮定位按钮。
+  bool _nearBottom = true;
+
+  /// 进入会话后尚未完成「初始定位到最新消息」，用于在消息加载完成后
+  /// 一次性跳到底部，避免停留在列表顶部。
+  bool _needsInitialScrollToLatest = true;
   CancelToken? _cancelToken;
   bool _isSending = false;
   int? _currentAssistantId;
@@ -147,6 +158,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     _conversationsNotifier = ref.read(conversationsProvider.notifier);
     // R8：异步探测语音能力（设备/权限不可用时隐藏按钮，不崩溃）。
     _initSpeech();
+    // v1.2.18：监听滚动位置，离底时显示「回到最新 / 返回上一条」。
+    _scrollController.addListener(_onScrollChanged);
   }
 
   @override
@@ -155,6 +168,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     _cancelToken?.cancel();
     _cancelToken = null;
     _inputController.dispose();
+    _scrollController.removeListener(_onScrollChanged);
     _scrollController.dispose();
     try {
       _speech.cancel();
@@ -173,6 +187,23 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     ref.listen(pendingSearchMessageIdProvider, (prev, next) {
       if (next != null) {
         _scrollToMessage(messages, next);
+      }
+    });
+    // v1.2.18：切换会话时标记「待初始定位到最新消息」，
+    // 消息列表加载完成后一次性跳到底部（新消息流式增量不再触发）。
+    ref.listen(selectedConversationProvider, (prev, next) {
+      if (next?.id != prev?.id) {
+        _needsInitialScrollToLatest = true;
+        _nearBottom = true;
+      }
+    });
+    // v1.2.18：进入会话后消息列表首次加载完成 → 直接定位到最新消息。
+    ref.listen(messagesProvider, (prev, next) {
+      if (_needsInitialScrollToLatest && next.isNotEmpty) {
+        _needsInitialScrollToLatest = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _jumpToLatest();
+        });
       }
     });
     // 兜底：列表为空且 provider 从未成功加载时，主动补一次加载，
@@ -292,60 +323,78 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       body: Column(
         children: [
           Expanded(
-            child: selected == null
-                ? _buildEmptyState(context, apiConfigs.isEmpty)
-                : messages.isEmpty
-                    ? const Center(child: Text('发送第一条消息开始对话'))
-                    : Center(
-                        // v1.2.0 H2：大屏聊天区限宽 760dp 居中；窄屏宽度不足时
-                        // Center 宽松约束下 ListView 自动收缩，无感知。
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 760),
-                          child: ListView.builder(
-                            controller: _scrollController,
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            itemCount: messages.length,
-                            itemBuilder: (context, index) {
-                              final message = messages[index];
-                              final messageKey = message.id == null
-                                  ? null
-                                  : _messageKeys.putIfAbsent(
-                                      message.id!, () => GlobalKey());
-                              final bubble = MessageBubble(
-                                isUser: message.role == 'user',
-                                content: message.content,
-                                status: message.status,
-                                errorMessage: message.errorMessage,
-                                onRetry: message.role == 'assistant' &&
-                                        message.status == 'error'
-                                    ? () => _retry(message)
-                                    : null,
-                                reasoningContent: message.reasoningContent,
-                                reasoningDurationMs:
-                                    message.reasoningDurationMs,
-                                reasoningTokens: message.reasoningTokens,
-                                attachments: message.attachments,
-                                // R3 消息操作菜单回调：
-                                // 重新生成（仅已完成的助手消息）/ 编辑（仅用户消息）/
-                                // 删除 / 引用；对应菜单项在回调为 null 时自动隐藏。
-                                onRegenerate: message.role == 'assistant' &&
-                                        message.status == 'done'
-                                    ? () => _regenerate(message)
-                                    : null,
-                                onEdit: message.role == 'user'
-                                    ? () => _editMessage(message)
-                                    : null,
-                                onDelete: () => _deleteMessage(message),
-                                onQuote: () => _quoteMessage(message),
-                              );
-                              return messageKey == null
-                                  ? bubble
-                                  : KeyedSubtree(
-                                      key: messageKey, child: bubble);
-                            },
-                          ),
-                        ),
-                      ),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: selected == null
+                      ? _buildEmptyState(context, apiConfigs.isEmpty)
+                      : messages.isEmpty
+                          ? const Center(child: Text('发送第一条消息开始对话'))
+                          : Center(
+                              // v1.2.0 H2：大屏聊天区限宽 760dp 居中；窄屏宽度不足时
+                              // Center 宽松约束下 ListView 自动收缩，无感知。
+                              child: ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxWidth: 760),
+                                child: ListView.builder(
+                                  controller: _scrollController,
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 8),
+                                  itemCount: messages.length,
+                                  itemBuilder: (context, index) {
+                                    final message = messages[index];
+                                    final messageKey = message.id == null
+                                        ? null
+                                        : _messageKeys.putIfAbsent(
+                                            message.id!, () => GlobalKey());
+                                    final bubble = MessageBubble(
+                                      isUser: message.role == 'user',
+                                      content: message.content,
+                                      status: message.status,
+                                      errorMessage: message.errorMessage,
+                                      onRetry: message.role == 'assistant' &&
+                                              message.status == 'error'
+                                          ? () => _retry(message)
+                                          : null,
+                                      reasoningContent:
+                                          message.reasoningContent,
+                                      reasoningDurationMs:
+                                          message.reasoningDurationMs,
+                                      reasoningTokens: message.reasoningTokens,
+                                      attachments: message.attachments,
+                                      // R3 消息操作菜单回调：
+                                      // 重新生成（仅已完成的助手消息）/ 编辑（仅用户消息）/
+                                      // 删除 / 引用；对应菜单项在回调为 null 时自动隐藏。
+                                      onRegenerate:
+                                          message.role == 'assistant' &&
+                                                  message.status == 'done'
+                                              ? () => _regenerate(message)
+                                              : null,
+                                      onEdit: message.role == 'user'
+                                          ? () => _editMessage(message)
+                                          : null,
+                                      onDelete: () => _deleteMessage(message),
+                                      onQuote: () => _quoteMessage(message),
+                                    );
+                                    return messageKey == null
+                                        ? bubble
+                                        : KeyedSubtree(
+                                            key: messageKey, child: bubble);
+                                  },
+                                ),
+                              ),
+                            ),
+                ),
+                // v1.2.18：离底查看历史时显示悬浮定位按钮组
+                // （底部隐藏，滚动到历史位置后可见）。
+                if (!_nearBottom && selected != null && messages.isNotEmpty)
+                  Positioned(
+                    right: 12,
+                    bottom: 12,
+                    child: _buildJumpControls(context),
+                  ),
+              ],
+            ),
           ),
           _buildInputBar(context),
         ],
@@ -1654,6 +1703,152 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   /// 会话列表摘要：去 Markdown 标记后的纯文本，截断 40 字（PRD 4.3.2）。
   String _summarize(String text) => summarize(text);
 
+  /// v1.2.18：滚动位置监听 —— 距底部超过阈值视为「离开最新位置」，
+  /// 控制悬浮「回到最新 / 返回上一条」按钮组的显示与隐藏。
+  void _onScrollChanged() {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    final nearBottom =
+        position.maxScrollExtent - position.pixels <= _bottomThreshold;
+    if (nearBottom != _nearBottom) {
+      setState(() => _nearBottom = nearBottom);
+    }
+  }
+
+  /// v1.2.18：直接定位到最新消息（无动画，用于进入会话初始定位）。
+  void _jumpToLatest() {
+    if (!mounted || !_scrollController.hasClients) return;
+    _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+  }
+
+  /// v1.2.18：悬浮定位按钮组 —— 「返回上一条」（历史方向向上一条）
+  /// 与「回到最新」（平滑回滚到底部）。
+  Widget _buildJumpControls(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildJumpButton(
+          context,
+          icon: Icons.keyboard_arrow_up,
+          label: '返回上一条',
+          onTap: _goToPreviousMessage,
+        ),
+        const SizedBox(width: 8),
+        _buildJumpButton(
+          context,
+          icon: Icons.keyboard_arrow_down,
+          label: '回到最新',
+          onTap: () {
+            if (!_scrollController.hasClients) return;
+            _scrollController.animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOut,
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildJumpButton(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: colorScheme.surface,
+      elevation: 4,
+      shadowColor: colorScheme.shadow.withValues(alpha: 0.35),
+      borderRadius: BorderRadius.circular(24),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: colorScheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: Theme.of(context)
+                    .textTheme
+                    .labelLarge
+                    ?.copyWith(color: colorScheme.onSurface),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// v1.2.18：「返回上一条」—— 定位到当前视口顶部可见消息的上一条
+  /// （向上翻一条历史消息），符合 IM 逐条回溯习惯。
+  void _goToPreviousMessage() {
+    if (!_scrollController.hasClients) return;
+    final messages = ref.read(messagesProvider);
+    if (messages.isEmpty) return;
+    final topIndex = _topVisibleIndex(messages);
+    if (topIndex == null) return;
+    if (topIndex <= 0) {
+      _showSnack('已是第一条消息');
+      return;
+    }
+    final targetIndex = topIndex - 1;
+    final target = messages[targetIndex];
+    final ctx = target.id == null
+        ? null
+        : _messageKeys[target.id]?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+        alignment: 0.0,
+      );
+    } else {
+      final estimated = (targetIndex * 96.0)
+          .clamp(0.0, _scrollController.position.maxScrollExtent)
+          .toDouble();
+      _scrollController.animateTo(
+        estimated,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  /// 当前视口内顶部第一条可见消息的索引（部分可见也算），用于
+  /// 「返回上一条」确定目标位置。
+  int? _topVisibleIndex(List<ChatMessage> messages) {
+    final viewportBox = _scrollController.position.context.storageContext
+        .findRenderObject() as RenderBox?;
+    if (viewportBox == null) return null;
+    final viewportTop = viewportBox.localToGlobal(Offset.zero).dy;
+    int? best;
+    double bestTop = double.infinity;
+    for (var i = 0; i < messages.length; i++) {
+      final id = messages[i].id;
+      if (id == null) continue;
+      final ctx = _messageKeys[id]?.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject() as RenderBox?;
+      if (box == null) continue;
+      final top = box.localToGlobal(Offset.zero).dy;
+      final bottom = top + box.size.height;
+      if (bottom > viewportTop + 1.0 && top < bestTop) {
+        bestTop = top;
+        best = i;
+      }
+    }
+    return best;
+  }
+
   void _scrollToBottom() {
     if (!mounted || !_scrollController.hasClients) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1669,7 +1864,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   /// L6：流式高频回调场景的节流版自动滚动 —— 两次滚动间隔不低于
   /// [_autoScrollThrottle]，避免每 token 触发一次 200ms 动画导致卡顿。
+  /// v1.2.18：用户离底查看历史时不强制拉回底部（IM 习惯），
+  /// 由悬浮「回到最新」按钮主动回滚。
   void _scrollToBottomThrottled() {
+    if (!_nearBottom) return;
     final now = DateTime.now();
     if (now.difference(_lastAutoScrollAt) < _autoScrollThrottle) return;
     _lastAutoScrollAt = now;
