@@ -1,7 +1,7 @@
 name: llm_chat_app
 description: "LLM Chat App：Flutter 跨平台第三方 LLM 对话客户端（微信风格界面，支持 OpenAI 兼容 API、主动消息、局域网双端同步）。详见 PRD 第 1-9 章。"
 publish_to: "none"
-version: 1.2.7
+version: 1.2.8
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
