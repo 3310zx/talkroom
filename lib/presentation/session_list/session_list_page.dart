@@ -109,7 +109,16 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
                         itemBuilder: (context, index) {
                           final conversation = visible[index];
                           final isSelected = selected?.id == conversation.id;
-                          return ListTile(
+                          // R14 长按/右键会话条目弹出操作菜单（重命名/删除等）；
+                          // GestureDetector 仅拦截次级（右键）手势，不影响点选。
+                          return GestureDetector(
+                            onSecondaryTapDown: (details) =>
+                                _showConversationMenuAt(
+                                    details.globalPosition, conversation),
+                            onLongPressStart: (details) =>
+                                _showConversationMenuAt(
+                                    details.globalPosition, conversation),
+                            child: ListTile(
                             selected: isSelected,
                             leading: Icon(
                               conversation.pinned
@@ -120,7 +129,9 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
                                   : null,
                             ),
                             title: Text(
-                              conversation.title,
+                              conversation.title.trim().isEmpty
+                                  ? '未命名会话'
+                                  : conversation.title,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -134,22 +145,10 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
                             trailing: PopupMenuButton<String>(
                               onSelected: (value) =>
                                   _onMenu(ref, conversation, value),
-                              itemBuilder: (context) => [
-                                PopupMenuItem(
-                                  value: 'pin',
-                                  child: Text(
-                                      conversation.pinned ? '取消置顶' : '置顶'),
-                                ),
-                                const PopupMenuItem(
-                                    value: 'rename', child: Text('重命名')),
-                                const PopupMenuItem(
-                                    value: 'template', child: Text('默认模板')),
-                                const PopupMenuItem(
-                                    value: 'archive', child: Text('归档')),
-                                const PopupMenuItem(
-                                    value: 'delete', child: Text('删除会话')),
-                              ],
+                              itemBuilder: (context) =>
+                                  _buildConversationMenuItems(conversation),
                             ),
+                          ),
                           );
                         },
                       ),
@@ -207,6 +206,43 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
   void _selectConversation(WidgetRef ref, Conversation conversation) {
     ref.read(selectedConversationProvider.notifier).state = conversation;
     ref.read(messagesProvider.notifier).loadForConversation(conversation.id!);
+  }
+
+  /// R14 会话操作菜单项：三点按钮菜单与长按/右键菜单共用。
+  List<PopupMenuEntry<String>> _buildConversationMenuItems(
+      Conversation conversation) {
+    return [
+      PopupMenuItem(
+        value: 'pin',
+        child: Text(conversation.pinned ? '取消置顶' : '置顶'),
+      ),
+      const PopupMenuItem(value: 'rename', child: Text('重命名')),
+      const PopupMenuItem(value: 'template', child: Text('默认模板')),
+      const PopupMenuItem(value: 'archive', child: Text('归档')),
+      const PopupMenuItem(value: 'delete', child: Text('删除会话')),
+    ];
+  }
+
+  /// R14 长按/右键会话条目：在点击位置弹出上下文操作菜单，
+  /// 与三点按钮菜单保持一致的编辑能力（置顶/重命名/模板/归档/删除）。
+  Future<void> _showConversationMenuAt(
+      Offset globalPosition, Conversation conversation) async {
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    final local = overlay.globalToLocal(globalPosition);
+    final value = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        local.dx,
+        local.dy,
+        local.dx + 1,
+        local.dy + 1,
+      ),
+      items: _buildConversationMenuItems(conversation),
+    );
+    if (value == null || !mounted) return;
+    await _onMenu(ref, conversation, value);
   }
 
   Future<void> _onMenu(
