@@ -163,15 +163,13 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
                                   : null,
                             ),
                             title: Text(
-                              conversation.title.trim().isEmpty
-                                  ? '未命名会话'
-                                  : conversation.title,
+                              conversationDisplayTitle(conversation.title),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
                             subtitle: Text(
                               '${_formatTime(conversation.updatedAt)}\n'
-                              '${conversation.lastMessage.isEmpty ? '暂无消息' : conversation.lastMessage}',
+                              '${conversationDisplaySummary(conversation.lastMessage)}',
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),

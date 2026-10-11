@@ -111,6 +111,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   final ScrollController _scrollController = ScrollController();
   final Map<int, GlobalKey> _messageKeys = {};
 
+  /// v1.2.20：消息 item 构建缓存 —— 流式增量/滚动时仅重建内容发生变化的
+  /// 消息（引用 identical 判断），其余条目直接复用上次构建的 widget，
+  /// 消除长会话列表每次增量对全部可见消息的重复构造与 element diff。
+  /// 会话切换/消息删除导致列表缩短时按计数差异惰性清空。
+  final Map<int, Widget> _messageItemCache = {};
+  final Map<int, ChatMessage> _messageItemSource = {};
+
   /// v1.2.18：消息定位 —— 距底部超过该阈值视为「离开最新位置」，
   /// 此时显示悬浮「回到最新 / 返回上一条」按钮组。
   static const double _bottomThreshold = 120.0;
@@ -181,7 +188,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   @override
   Widget build(BuildContext context) {
     final selected = ref.watch(selectedConversationProvider);
-    final messages = ref.watch(messagesProvider);
+    // v1.2.20：顶层不再 watch messagesProvider —— 流式增量只应驱动
+    // 列表子树（_MessageListView）重建，顶层 watch 会导致 AppBar / 输入栏
+    // / 详情栏随每条增量整页 rebuild。此处改为 read，仅保留下方 listen
+    // 用于初始定位与搜索跳转。
+    final messages = ref.read(messagesProvider);
     final apiConfigs = ref.watch(apiConfigsProvider);
     // R12：监听到全局搜索跳转目标后滚动定位到对应消息。
     ref.listen(pendingSearchMessageIdProvider, (prev, next) {
@@ -238,7 +249,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              selected?.title ?? 'LLM Chat',
+              selected == null ? 'LLM Chat' : conversationDisplayTitle(selected.title),
               style: Theme.of(context).textTheme.titleMedium,
             ),
             InkWell(
@@ -781,6 +792,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // H1：统一走缓存 Notifier，dispose 后仍可完成终态落库。
       final messagesNotifier =
           _messagesNotifier ?? ref.read(messagesProvider.notifier);
+      // v1.2.20：先把节流中的流式增量同步刷入 state，避免终态 update
+      // 之后残余片段再追加到已完成消息上。
+      messagesNotifier?.flushStreaming();
       await messagesNotifier!.update(ChatMessage(
         id: assistantId,
         conversationId: conversationId,
@@ -1316,6 +1330,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (current == null) return;
     // H1：统一用 initState 缓存的 Notifier 落库，不依赖 ref/mounted。
     final notifier = _messagesNotifier ?? ref.read(messagesProvider.notifier);
+    // v1.2.20：失败/停止终态前同步刷新节流中的流式增量。
+    notifier?.flushStreaming();
     await notifier!
         .update(current.copyWith(status: status, errorMessage: errorMessage));
     if (conv != null) {
@@ -1853,12 +1869,28 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   /// v1.2.19：单条消息气泡构建 —— 从顶层 build 抽离，供 [_MessageListView]
   /// 复用；外层包 [RepaintBoundary]，列表滚动或父层重建时隔离单条气泡重绘。
+  /// v1.2.20：增加 item 构建缓存 —— 消息对象引用未变（identical）时直接
+  /// 返回上次构建的 widget，流式增量/滑动期间不再重复构造 MessageBubble 与
+  /// Markdown 子树；仅内容/状态真正变化的条目触发重建。
   Widget _buildMessageItem(BuildContext context, int index) {
     final messages = ref.read(messagesProvider);
     final message = messages[index];
-    final messageKey = message.id == null
+    final id = message.id;
+    if (id != null) {
+      final prev = _messageItemSource[id];
+      final cached = _messageItemCache[id];
+      if (cached != null && identical(prev, message)) {
+        return cached;
+      }
+      // 列表缩短（删除/切换会话）导致缓存膨胀时惰性清空。
+      if (_messageItemCache.length > messages.length + 8) {
+        _messageItemCache.clear();
+        _messageItemSource.clear();
+      }
+    }
+    final messageKey = id == null
         ? null
-        : _messageKeys.putIfAbsent(message.id!, () => GlobalKey());
+        : _messageKeys.putIfAbsent(id, () => GlobalKey());
     final bubble = MessageBubble(
       isUser: message.role == 'user',
       content: message.content,
@@ -1881,11 +1913,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       onDelete: () => _deleteMessage(message),
       onQuote: () => _quoteMessage(message),
     );
-    return RepaintBoundary(
+    final built = RepaintBoundary(
       child: messageKey == null
           ? bubble
           : KeyedSubtree(key: messageKey, child: bubble),
     );
+    if (id != null) {
+      _messageItemSource[id] = message;
+      _messageItemCache[id] = built;
+    }
+    return built;
   }
 }
 

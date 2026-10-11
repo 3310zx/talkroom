@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/utils.dart';
 import '../../domain/models/conversation.dart';
 import '../../domain/repositories/conversation_repository.dart';
 import 'database_provider.dart';
@@ -20,7 +21,34 @@ class ConversationsNotifier extends StateNotifier<List<Conversation>> {
   List<Conversation> get snapshot => state;
 
   Future<void> load() async {
-    state = await _repository.getAll();
+    final rows = await _repository.getAll();
+    // v1.2.20：惰性清洗存量脏数据 —— 历史版本导入/生成时可能写入以换行
+    // 或不可见字符开头/包含的 title、last_message，渲染层直接展示会出现
+    // 「标题空白、摘要只剩日期」。这里统一清洗后展示，并将变化写回 DB
+    // （直接写仓储避免再次触发 load 造成递归；失败不影响本次展示）。
+    var needWriteBack = false;
+    final cleaned = <Conversation>[];
+    for (final c in rows) {
+      final title = cleanConversationText(c.title);
+      final summary = cleanConversationText(c.lastMessage);
+      final newTitle = title.isEmpty ? '未命名会话' : title;
+      if (newTitle != c.title || summary != c.lastMessage) {
+        needWriteBack = true;
+        cleaned.add(c.copyWith(title: newTitle, lastMessage: summary));
+      } else {
+        cleaned.add(c);
+      }
+    }
+    if (needWriteBack) {
+      for (final c in cleaned) {
+        try {
+          await _repository.update(c);
+        } catch (_) {
+          // 写回失败不影响内存态展示。
+        }
+      }
+    }
+    state = cleaned;
   }
 
   Future<int> create({String title = '新会话'}) async {

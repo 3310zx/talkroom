@@ -59,36 +59,38 @@ class ChatSessionDrawer extends ConsumerWidget {
                         final isSelected = selected?.id == conversation.id;
                         // 长按弹出操作菜单；GestureDetector 仅拦截长按/次级
                         // 手势，不影响点选切换会话。
-                        return GestureDetector(
-                          onLongPressStart: (details) =>
-                              _showConversationMenuAt(
-                                  context, details.globalPosition,
-                                  conversation, ref),
-                          child: ListTile(
-                            selected: isSelected,
-                            leading: Icon(
-                              conversation.pinned
-                                  ? Icons.push_pin
-                                  : Icons.chat_bubble_outline,
-                              color: conversation.pinned
-                                  ? AppTheme.brandGreen
-                                  : null,
+                        // v1.2.20：条目包 RepaintBoundary，滚动/重建时隔离
+                        // 单条重绘（与 session_list_page 保持一致）。
+                        return RepaintBoundary(
+                          child: GestureDetector(
+                            onLongPressStart: (details) =>
+                                _showConversationMenuAt(
+                                    context, details.globalPosition,
+                                    conversation, ref),
+                            child: ListTile(
+                              selected: isSelected,
+                              leading: Icon(
+                                conversation.pinned
+                                    ? Icons.push_pin
+                                    : Icons.chat_bubble_outline,
+                                color: conversation.pinned
+                                    ? AppTheme.brandGreen
+                                    : null,
+                              ),
+                              title: Text(
+                                conversationDisplayTitle(conversation.title),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: Text(
+                                '${_formatTime(conversation.updatedAt)}\n'
+                                '${conversationDisplaySummary(conversation.lastMessage)}',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              onTap: () => _selectConversation(
+                                  context, ref, conversation),
                             ),
-                            title: Text(
-                              conversation.title.trim().isEmpty
-                                  ? '未命名会话'
-                                  : conversation.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              '${_formatTime(conversation.updatedAt)}\n'
-                              '${conversation.lastMessage.isEmpty ? '暂无消息' : conversation.lastMessage}',
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            onTap: () =>
-                                _selectConversation(context, ref, conversation),
                           ),
                         );
                       },

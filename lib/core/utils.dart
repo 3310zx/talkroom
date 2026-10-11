@@ -28,6 +28,34 @@ void showToast(BuildContext context, String message) {
     ..showSnackBar(SnackBar(content: Text(message)));
 }
 
+/// 会话标题/摘要清洗：去掉零宽与不可见控制字符、压缩连续空白（含换行/
+/// 全角空格）为单空格、去除首尾空白。
+///
+/// v1.2.20 修复：存量会话 title / last_message 以换行或不可见字符开头时，
+/// 渲染层直接展示原串会导致列表条目「标题空白、摘要只剩日期」——
+/// Text 单行/两行约束下首行被换行符顶空。此处统一清洗后供展示与写回。
+String cleanConversationText(String? text) {
+  if (text == null || text.isEmpty) return '';
+  return text
+      // 零宽连接符/左右标记/词连接符/软连字符/BOM 等不可见字符。
+      .replaceAll(RegExp(r'[\u200B-\u200F\uFEFF\u2060\u00AD]'), '')
+      // 连续空白（含 \n / \r / \t / 全角空格）压缩为单个空格。
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
+/// 会话标题展示：清洗后为空则兜底「未命名会话」。
+String conversationDisplayTitle(String title) {
+  final cleaned = cleanConversationText(title);
+  return cleaned.isEmpty ? '未命名会话' : cleaned;
+}
+
+/// 会话摘要展示：清洗后为空则兜底「暂无消息」。
+String conversationDisplaySummary(String lastMessage) {
+  final cleaned = cleanConversationText(lastMessage);
+  return cleaned.isEmpty ? '暂无消息' : cleaned;
+}
+
 /// 解析当前生效模型：会话自带 modelId 优先，其次服务商首个模型，兜底空串。
 String resolveModel(ApiConfig? config, Conversation? conv) {
   if (conv != null && conv.modelId != null && conv.modelId!.isNotEmpty) {

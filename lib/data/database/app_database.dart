@@ -96,6 +96,8 @@ class AppDatabase {
         temperature   REAL,
         max_tokens    INTEGER,
         top_p         REAL,
+        frequency_penalty REAL,
+        presence_penalty  REAL,
         pinned        INTEGER NOT NULL DEFAULT 0,
         archived      INTEGER NOT NULL DEFAULT 0,
         prompt_template_id INTEGER,
