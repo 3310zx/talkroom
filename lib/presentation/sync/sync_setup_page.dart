@@ -44,10 +44,18 @@ class _SyncSetupPageState extends ConsumerState<SyncSetupPage> {
   }
 
   /// R15：扫码配对入口，进入相机扫码页。
-  void _scanPair() {
-    Navigator.of(context).push(
+  ///
+  /// 扫码页解析成功后通过 pop 返回 {host, port, code}，
+  /// 这里必须 await 返回值并回填到表单，否则扫码后配对信息不会填入。
+  Future<void> _scanPair() async {
+    final parsed = await Navigator.of(context).push<Map<String, String>>(
       MaterialPageRoute(builder: (_) => const ScanPairPage()),
     );
+    if (!mounted || parsed == null) return;
+    _hostCtrl.text = parsed['host'] ?? '';
+    _portCtrl.text = parsed['port'] ?? '';
+    _codeCtrl.text = parsed['code'] ?? '';
+    _toast('扫码成功，已自动填入电脑 IP、端口与配对码');
   }
 
   Future<void> _pair() async {
