@@ -168,7 +168,11 @@ class _HomePageState extends ConsumerState<HomePage> {
     final width = MediaQuery.of(context).size.width;
     if (width >= 840) {
       setState(() => _railSettingsSelected = true);
-      _wideScaffoldKey.currentState?.openDrawer();
+      // macOS 使用全宽「左侧导航 + 右侧详情」设置视图（见 _buildWide），
+      // 不再弹出抽屉；iPad 继续走左侧 Drawer。
+      if (!AppPlatform.isMacOS) {
+        _wideScaffoldKey.currentState?.openDrawer();
+      }
     } else {
       ref.read(mobileTabProvider.notifier).state = 1;
     }
@@ -316,11 +320,16 @@ class _HomePageState extends ConsumerState<HomePage> {
             selectedIndex: _railSettingsSelected ? 1 : 0,
             onDestinationSelected: (index) {
               if (index == 1) {
-                // 设置页抽屉化：宽屏下从左侧滑出设置页。
+                // 设置：macOS 直接切换全宽设置视图；iPad 从左侧滑出抽屉。
                 setState(() => _railSettingsSelected = true);
-                _wideScaffoldKey.currentState?.openDrawer();
+                if (!AppPlatform.isMacOS) {
+                  _wideScaffoldKey.currentState?.openDrawer();
+                }
               } else {
-                _wideScaffoldKey.currentState?.closeDrawer();
+                setState(() => _railSettingsSelected = false);
+                if (!AppPlatform.isMacOS) {
+                  _wideScaffoldKey.currentState?.closeDrawer();
+                }
                 ref.read(mobileTabProvider.notifier).state = index;
               }
             },
@@ -342,22 +351,29 @@ class _HomePageState extends ConsumerState<HomePage> {
             ],
           ),
           const VerticalDivider(width: 1),
-          SizedBox(width: leftWidth, child: const SessionListPage()),
-          const VerticalDivider(width: 1),
-          Expanded(
-            // H2：聊天区在 840/1200dp 断点互切时共享同一 GlobalKey 保活 State。
-            // Talkroom macOS：详情面板显隐由 detailVisible（按钮开关）控制。
-            child: showDetail
-                ? Row(
-                    children: [
-                      Expanded(child: ChatPage(key: _chatKeepAliveKey)),
-                      const VerticalDivider(width: 1),
-                      SizedBox(
-                          width: rightWidth, child: const ChatDetailPanel()),
-                    ],
-                  )
-                : ChatPage(key: _chatKeepAliveKey),
-          ),
+          // macOS：选中「设置」时右侧整区切换为桌面端设置视图
+          //（左侧分类导航 + 右侧详情面板），与会话区互斥；
+          // iPad 仍走 Drawer 弹出设置页（上方 drawer 参数），此处不受影响。
+          if (AppPlatform.isMacOS && _railSettingsSelected)
+            const Expanded(child: SettingsPage())
+          else ...[
+            SizedBox(width: leftWidth, child: const SessionListPage()),
+            const VerticalDivider(width: 1),
+            Expanded(
+              // H2：聊天区在 840/1200dp 断点互切时共享同一 GlobalKey 保活 State。
+              // Talkroom macOS：详情面板显隐由 detailVisible（按钮开关）控制。
+              child: showDetail
+                  ? Row(
+                      children: [
+                        Expanded(child: ChatPage(key: _chatKeepAliveKey)),
+                        const VerticalDivider(width: 1),
+                        SizedBox(
+                            width: rightWidth, child: const ChatDetailPanel()),
+                      ],
+                    )
+                  : ChatPage(key: _chatKeepAliveKey),
+            ),
+          ],
         ],
       ),
     );

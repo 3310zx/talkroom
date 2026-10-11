@@ -23,6 +23,7 @@ import '../prompt_templates/prompt_templates_page.dart';
 import '../sync/local_server_page.dart';
 import '../sync/sync_setup_page.dart';
 import 'backup_section.dart';
+import 'macos_settings_page.dart';
 
 /// 设置页（三栏右栏 / 移动端设置 Tab）。
 ///
@@ -55,6 +56,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    // macOS 桌面端使用「左侧分类导航 + 右侧详情面板」布局；
+    // iPad / iPhone 保持原有移动端设置体验不变。
+    if (AppPlatform.isMacOS) {
+      return const MacosSettingsPage();
+    }
+
     final apiConfigs = ref.watch(apiConfigsProvider);
     final serverStatus = ref.watch(localServerStatusProvider);
     final settings = ref.watch(settingsProvider);
