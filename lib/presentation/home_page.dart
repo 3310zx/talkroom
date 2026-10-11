@@ -288,6 +288,12 @@ class _HomePageState extends ConsumerState<HomePage> {
     final leftWidth = (maxWidth * 0.20).clamp(280.0, 360.0).toDouble();
     // v1.2.0 M1：详情面板宽度下限提升至 300，避免三栏下聊天区过窄。
     final rightWidth = (maxWidth * 0.22).clamp(300.0, 360.0).toDouble();
+    // Talkroom macOS 重构：详情面板由聊天页「详情」按钮显隐（默认隐藏），
+    // 两栏（会话列表+聊天区）为默认形态；macOS 断点放宽到 1000dp（窗口
+    // 缩放时优先保证聊天区），平板端维持 1200dp 自动三栏，互不影响。
+    final detailVisible = ref.watch(detailPanelVisibleProvider);
+    final detailBreakpoint = AppPlatform.isMacOS ? 1000.0 : 1200.0;
+    final showDetail = detailVisible && maxWidth >= detailBreakpoint;
     return Scaffold(
       key: _wideScaffoldKey,
       // 设置面板从左侧滑入（覆盖 NavigationRail 之上）；v1.2.0 L1 固定 360dp 对齐 M3。
@@ -340,7 +346,8 @@ class _HomePageState extends ConsumerState<HomePage> {
           const VerticalDivider(width: 1),
           Expanded(
             // H2：聊天区在 840/1200dp 断点互切时共享同一 GlobalKey 保活 State。
-            child: maxWidth >= 1200
+            // Talkroom macOS：详情面板显隐由 detailVisible（按钮开关）控制。
+            child: showDetail
                 ? Row(
                     children: [
                       Expanded(child: ChatPage(key: _chatKeepAliveKey)),

@@ -6,8 +6,10 @@ class MainFlutterWindow: NSWindow, NSWindowDelegate {
     static let frameKey = "llm_chat_window_frame"
     static let defaultWidth: CGFloat = 1280
     static let defaultHeight: CGFloat = 800
-    static let minWidth: CGFloat = 1200
-    static let minHeight: CGFloat = 800
+    // Talkroom macOS 重构：桌面端默认两栏（会话列表 | 聊天区），
+    // 最小宽度从 1200 放宽到 1000；详情面板需窗口 >= 1000 才可展开。
+    static let minWidth: CGFloat = 1000
+    static let minHeight: CGFloat = 700
   }
 
   override func awakeFromNib() {
@@ -16,7 +18,44 @@ class MainFlutterWindow: NSWindow, NSWindowDelegate {
     self.setFrame(self.frame, display: true)
     RegisterGeneratedPlugins(registry: flutterViewController)
 
-    // 最小尺寸约束：避免宽屏三栏布局被压垮
+    // Talkroom macOS：原生窗口样式（非自绘模糊）。
+    // - 隐藏标题文字、透明标题栏：Flutter 工具栏内容延伸至标题栏区域，
+    //   与系统红绿灯按钮共存，形成「工具栏与内容」自然层次；
+    // - macOS Tahoe 上由系统对标题栏应用原生液态玻璃材质，旧版系统
+    //   自动回退为普通标题栏（无需自绘透明层冒充）。
+    self.title = "Talkroom"
+    self.titleVisibility = .hidden
+    self.titlebarAppearsTransparent = true
+    // 引擎（Flutter 3.47）未暴露内容延伸标题栏 API，采用原生透明标题栏 +
+    // 窗口背景与主题表面同色（深色 0x111111），使红绿灯与工具栏、内容
+    // 形成统一层次；不使用自绘透明层冒充系统材质，旧版 macOS 同样适用。
+    self.backgroundColor = NSColor(name: nil) { appearance in
+      let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+      return NSColor(
+        calibratedRed: isDark ? 0.067 : 1.0,
+        green: isDark ? 0.067 : 1.0,
+        blue: isDark ? 0.067 : 1.0,
+        alpha: 1.0)
+    }
+
+    // 暴露系统辅助功能偏好（增加对比度 / 降低透明度），供 Flutter 侧
+    // 在玻璃材质弱化/不可用时切换到高对比回退主题（保证深色可读性）。
+    let accessibilityChannel = FlutterMethodChannel(
+      name: "talkroom/accessibility",
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
+    accessibilityChannel.setMethodCallHandler { call, result in
+      guard call.method == "getAccessibilityPrefs" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let ws = NSWorkspace.shared
+      result([
+        "increaseContrast": ws.accessibilityDisplayShouldIncreaseContrast,
+        "reduceTransparency": ws.accessibilityDisplayShouldReduceTransparency,
+      ])
+    }
+
+    // 最小尺寸约束：避免宽屏两栏布局被压垮
     self.contentMinSize = NSSize(
       width: Persistence.minWidth, height: Persistence.minHeight)
 

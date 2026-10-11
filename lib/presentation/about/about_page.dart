@@ -5,7 +5,7 @@ import '../../core/constants.dart';
 
 /// R21 关于页：版本号、更新日志、开源信息与 GitHub Releases 跳转。
 ///
-/// 入口：设置页「关于」区段、macOS 菜单「关于 LLM Chat」。
+/// 入口：设置页「关于」区段、macOS 菜单「关于 Talkroom」。
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
 

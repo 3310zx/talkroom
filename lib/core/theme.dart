@@ -110,22 +110,27 @@ abstract final class AppTheme {
   static ThemeData get dark => build(brightness: Brightness.dark);
 
   /// 按指定 seed 构建主题（preset / custom 模式）。
+  /// [highContrast]：系统「增加对比度」开启时提高文字/分隔对比（Liquid
+  /// Glass 弱化回退，保证深色可读性，不依赖玻璃材质）。
   static ThemeData build({
     Color seed = brandGreen,
     Brightness brightness = Brightness.light,
+    bool highContrast = false,
   }) =>
-      _build(brightness, seed: seed);
+      _build(brightness, seed: seed, highContrast: highContrast);
 
   /// 莫奈模式：直接使用系统动态 scheme 构建主题；
   /// [dynamicScheme] 为 null（非 Android 12+）时降级为普通 seed 构建。
   static ThemeData monet(
     ColorScheme? dynamicScheme, {
     Brightness brightness = Brightness.light,
+    bool highContrast = false,
   }) =>
       _build(
         brightness,
         useDynamic: dynamicScheme != null,
         dynamicScheme: dynamicScheme,
+        highContrast: highContrast,
       );
 
   static ThemeData _build(
@@ -133,6 +138,7 @@ abstract final class AppTheme {
     Color seed = brandGreen,
     bool useDynamic = false,
     ColorScheme? dynamicScheme,
+    bool highContrast = false,
   }) {
     final isDark = brightness == Brightness.dark;
 
@@ -183,6 +189,30 @@ abstract final class AppTheme {
         errorContainer: isDark ? const Color(0xFF93000A) : const Color(0xFFFFDAD6),
         onErrorContainer:
             isDark ? const Color(0xFFFFDAD6) : const Color(0xFF410002),
+      );
+    }
+
+    // Talkroom Liquid Glass 回退：系统「增加对比度」时提高文字/分隔/
+    // 表面层次对比，保证深色模式可读性（不依赖玻璃材质；对不支持
+    // Liquid Glass 的旧版 macOS 同样受益）。
+    if (highContrast) {
+      scheme = scheme.copyWith(
+        onSurface: isDark ? Colors.white : const Color(0xFF000000),
+        onSurfaceVariant:
+            isDark ? const Color(0xFFCFCFD2) : const Color(0xFF3C3C3E),
+        outline: isDark ? const Color(0xFFB4B4B8) : const Color(0xFF4A4A4C),
+        outlineVariant:
+            isDark ? const Color(0xFF4E4E52) : const Color(0xFFB8B8BC),
+        surfaceContainerLowest:
+            isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFFFFFF),
+        surfaceContainerLow:
+            isDark ? const Color(0xFF141414) : const Color(0xFFF5F5F5),
+        surfaceContainer:
+            isDark ? const Color(0xFF1A1A1C) : const Color(0xFFEFEFEF),
+        surfaceContainerHigh:
+            isDark ? const Color(0xFF212124) : const Color(0xFFE8E8E8),
+        surfaceContainerHighest:
+            isDark ? const Color(0xFF28282B) : const Color(0xFFE0E0E0),
       );
     }
 

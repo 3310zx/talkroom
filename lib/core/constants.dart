@@ -1,7 +1,7 @@
 /// 全局常量与默认值（对齐 PRD 附录「默认值」）。
 abstract final class AppConstants {
-  /// 应用名
-  static const String appName = 'LLM Chat';
+  /// 应用名（Talkroom 品牌统一后的显示名）
+  static const String appName = 'Talkroom';
 
   /// 当前应用版本号（与 pubspec.yaml 的 version 保持一致；检查更新时与远端 tag 比对）
   static const String appVersion = '1.2.21';

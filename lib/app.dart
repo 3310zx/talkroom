@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'application/providers/settings_provider.dart';
+import 'core/accessibility.dart';
 import 'core/constants.dart';
 import 'core/platform.dart';
 import 'core/theme.dart';
@@ -19,11 +20,26 @@ import 'presentation/menu_commands.dart';
 /// macOS 专属：外层包裹 [PlatformMenuBar] 定制应用菜单栏（应用/文件/编辑/
 /// 视图），菜单动作经 [MenuCommandBus] 交给 HomePage 处理；编辑菜单通过
 /// Flutter 文本命令通道修复默认 xib 菜单对 Flutter 文本框无效的问题。
-class LlmChatApp extends ConsumerWidget {
+class LlmChatApp extends ConsumerStatefulWidget {
   const LlmChatApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<LlmChatApp> createState() => _LlmChatAppState();
+}
+
+class _LlmChatAppState extends ConsumerState<LlmChatApp> {
+  @override
+  void initState() {
+    super.initState();
+    // 读取系统辅助功能偏好（增加对比度/降低透明度），用于 Liquid Glass
+    // 弱化时的高对比回退主题；macOS 专属，异步读取不阻塞启动。
+    AppAccessibility.load().then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
     final themeMode = AppThemeMode.fromValue(
       settings[AppConstants.settingThemeMode],
@@ -45,14 +61,28 @@ class LlmChatApp extends ConsumerWidget {
             dynamicLight != null &&
             dynamicDark != null;
         return MaterialApp(
-          title: 'LLM Chat',
+          title: AppConstants.appName,
           debugShowCheckedModeBanner: false,
           theme: useDynamic
-              ? AppTheme.monet(dynamicLight)
-              : AppTheme.build(seed: seed),
+              ? AppTheme.monet(
+                  dynamicLight,
+                  highContrast: AppAccessibility.increaseContrast,
+                )
+              : AppTheme.build(
+                  seed: seed,
+                  highContrast: AppAccessibility.increaseContrast,
+                ),
           darkTheme: useDynamic
-              ? AppTheme.monet(dynamicDark, brightness: Brightness.dark)
-              : AppTheme.build(seed: seed, brightness: Brightness.dark),
+              ? AppTheme.monet(
+                  dynamicDark,
+                  brightness: Brightness.dark,
+                  highContrast: AppAccessibility.increaseContrast,
+                )
+              : AppTheme.build(
+                  seed: seed,
+                  brightness: Brightness.dark,
+                  highContrast: AppAccessibility.increaseContrast,
+                ),
           themeMode: themeMode.themeMode,
           home: const HomePage(),
         );
@@ -71,10 +101,10 @@ class LlmChatApp extends ConsumerWidget {
   List<PlatformMenu> _buildMenus() {
     return [
       PlatformMenu(
-        label: 'LLM Chat',
+        label: AppConstants.appName,
         menus: [
           PlatformMenuItem(
-            label: '关于 LLM Chat',
+            label: '关于 ${AppConstants.appName}',
             onSelected: () => MenuCommandBus.fire(MenuAction.about),
           ),
           PlatformMenuItem(
@@ -94,7 +124,7 @@ class LlmChatApp extends ConsumerWidget {
             onSelected: () => MenuCommandBus.fire(MenuAction.checkUpdate),
           ),
           PlatformMenuItem(
-            label: '退出 LLM Chat',
+            label: '退出 ${AppConstants.appName}',
             shortcut: const SingleActivator(
               LogicalKeyboardKey.keyQ,
               meta: true,

@@ -229,7 +229,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           // R21：关于页入口（版本号、更新日志、开源信息、GitHub Releases）。
           ListTile(
             leading: const Icon(Icons.info_outline),
-            title: const Text('关于 LLM Chat'),
+            title: Text('关于 ${AppConstants.appName}'),
             subtitle: Text('版本 $_currentVersion · 更新日志 · 开源信息'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(

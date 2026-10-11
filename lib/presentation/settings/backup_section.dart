@@ -183,7 +183,7 @@ class BackupSection extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('识别为 LLM Chat 备份（schema v${backup.schemaVersion}）'),
+              Text('识别为 Talkroom 备份（schema v${backup.schemaVersion}）'),
               const SizedBox(height: 12),
               _statRow('会话', backup.conversations.length),
               _statRow('消息', messageCount),

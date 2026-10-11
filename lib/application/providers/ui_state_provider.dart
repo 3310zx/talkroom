@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/platform.dart';
 import '../../domain/models/api_config.dart';
 import '../../domain/models/conversation.dart';
 
@@ -17,3 +18,9 @@ final mobileTabProvider = StateProvider<int>((ref) => 0);
 /// 全局搜索页命中后写入，ChatPage 监听到非空值时滚动定位到该消息，
 /// 定位完成后自动清空，避免重复滚动。
 final pendingSearchMessageIdProvider = StateProvider<int?>((ref) => null);
+
+/// 桌面端聊天详情面板显隐（Talkroom macOS 重构：默认隐藏，聊天页「详情」
+/// 按钮展开；平板端保持默认展开以维持既有三栏布局，不破坏平板体验）。
+final detailPanelVisibleProvider = StateProvider<bool>((ref) {
+  return AppPlatform.isMacOS ? false : true;
+});

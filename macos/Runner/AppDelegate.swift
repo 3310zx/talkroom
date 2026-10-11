@@ -34,7 +34,7 @@ class AppDelegate: FlutterAppDelegate {
     if flock(fd, LOCK_EX | LOCK_NB) != 0 {
       // 已有实例持有锁：提示并退出
       let alert = NSAlert()
-      alert.messageText = "LLM Chat 已在运行"
+      alert.messageText = "Talkroom 已在运行"
       alert.informativeText = "检测到已有实例在运行。为避免数据冲突，请切换到已打开的窗口。"
       alert.alertStyle = .warning
       alert.runModal()

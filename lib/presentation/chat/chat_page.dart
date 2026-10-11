@@ -249,7 +249,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              selected == null ? 'LLM Chat' : conversationDisplayTitle(selected.title),
+              selected == null
+                  ? AppConstants.appName
+                  : conversationDisplayTitle(selected.title),
               style: Theme.of(context).textTheme.titleMedium,
             ),
             InkWell(
@@ -329,6 +331,23 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 );
               },
             ),
+            // Talkroom macOS 桌面端：详情面板展开/收起（两栏默认隐藏）。
+            // 断点与 home_page 一致（>=1000），窄窗口不显示按钮避免挤压。
+            if (AppPlatform.isMacOS &&
+                MediaQuery.of(context).size.width >= 1000)
+              IconButton(
+                icon: Icon(
+                  ref.watch(detailPanelVisibleProvider)
+                      ? Icons.info
+                      : Icons.info_outline,
+                ),
+                tooltip: '详情面板',
+                onPressed: () {
+                  final notifier =
+                      ref.read(detailPanelVisibleProvider.notifier);
+                  notifier.state = !notifier.state;
+                },
+              ),
         ],
       ),
       body: Column(

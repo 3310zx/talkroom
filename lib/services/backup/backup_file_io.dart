@@ -41,7 +41,7 @@ abstract final class BackupFileIO {
     await file.writeAsString(jsonContent, flush: true);
     await Share.shareXFiles(
       [XFile(file.path, mimeType: kMimeJson)],
-      subject: 'LLM Chat 数据备份',
+      subject: 'Talkroom 数据备份',
       text: '软件设置与记忆备份（不含 API Key 与同步凭据）',
     );
     return file.path;

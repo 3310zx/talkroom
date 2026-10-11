@@ -276,7 +276,7 @@ class MessageBubble extends StatelessWidget {
         title: const Text('分享'),
         onTap: () {
           Navigator.of(context).pop();
-          Share.share(content, subject: 'LLM Chat 消息');
+          Share.share(content, subject: 'Talkroom 消息');
         },
       ),
     ];

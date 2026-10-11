@@ -6,6 +6,7 @@ import '../../application/providers/database_provider.dart';
 import '../../application/providers/messages_provider.dart';
 import '../../application/providers/prompt_templates_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
+import '../../core/constants.dart';
 import '../../core/theme.dart';
 import '../../core/utils.dart';
 import '../../domain/models/conversation.dart';
@@ -60,7 +61,7 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_exportMode ? '选择会话导出' : 'LLM Chat'),
+        title: Text(_exportMode ? '选择会话导出' : AppConstants.appName),
         actions: [
           // R17：批量导出选择模式（导出所选会话为 Markdown / PDF）。
           if (_exportMode) ...[
