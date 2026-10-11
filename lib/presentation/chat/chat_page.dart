@@ -304,7 +304,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               icon: const Icon(Icons.ios_share),
               tooltip: '导出会话',
               onPressed: () {
-                final exportMessages = messages.where((m) {
+                final exportMessages = ref.read(messagesProvider).where((m) {
                   return m.role == 'user' || m.role == 'assistant';
                 }).toList();
                 if (exportMessages.isEmpty) {
@@ -328,71 +328,15 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 Positioned.fill(
                   child: selected == null
                       ? _buildEmptyState(context, apiConfigs.isEmpty)
-                      : messages.isEmpty
-                          ? const Center(child: Text('发送第一条消息开始对话'))
-                          : Center(
-                              // v1.2.0 H2：大屏聊天区限宽 760dp 居中；窄屏宽度不足时
-                              // Center 宽松约束下 ListView 自动收缩，无感知。
-                              child: ConstrainedBox(
-                                constraints:
-                                    const BoxConstraints(maxWidth: 760),
-                                child: ListView.builder(
-                                  controller: _scrollController,
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 8),
-                                  itemCount: messages.length,
-                                  itemBuilder: (context, index) {
-                                    final message = messages[index];
-                                    final messageKey = message.id == null
-                                        ? null
-                                        : _messageKeys.putIfAbsent(
-                                            message.id!, () => GlobalKey());
-                                    final bubble = MessageBubble(
-                                      isUser: message.role == 'user',
-                                      content: message.content,
-                                      status: message.status,
-                                      errorMessage: message.errorMessage,
-                                      onRetry: message.role == 'assistant' &&
-                                              message.status == 'error'
-                                          ? () => _retry(message)
-                                          : null,
-                                      reasoningContent:
-                                          message.reasoningContent,
-                                      reasoningDurationMs:
-                                          message.reasoningDurationMs,
-                                      reasoningTokens: message.reasoningTokens,
-                                      attachments: message.attachments,
-                                      // R3 消息操作菜单回调：
-                                      // 重新生成（仅已完成的助手消息）/ 编辑（仅用户消息）/
-                                      // 删除 / 引用；对应菜单项在回调为 null 时自动隐藏。
-                                      onRegenerate:
-                                          message.role == 'assistant' &&
-                                                  message.status == 'done'
-                                              ? () => _regenerate(message)
-                                              : null,
-                                      onEdit: message.role == 'user'
-                                          ? () => _editMessage(message)
-                                          : null,
-                                      onDelete: () => _deleteMessage(message),
-                                      onQuote: () => _quoteMessage(message),
-                                    );
-                                    return messageKey == null
-                                        ? bubble
-                                        : KeyedSubtree(
-                                            key: messageKey, child: bubble);
-                                  },
-                                ),
-                              ),
-                            ),
+                      : _MessageListView(
+                          scrollController: _scrollController,
+                          nearBottom: _nearBottom,
+                          jumpControlsBuilder: (ctx) =>
+                              _buildJumpControls(ctx),
+                          itemBuilder: (context, index) =>
+                              _buildMessageItem(context, index),
+                        ),
                 ),
-                // v1.2.18：离底查看历史时显示悬浮定位按钮组
-                // （底部隐藏，滚动到历史位置后可见）。
-                if (!_nearBottom && selected != null && messages.isNotEmpty)
-                  Positioned(
-                    right: 12,
-                    bottom: 12,
-                    child: _buildJumpControls(context),
-                  ),
               ],
             ),
           ),
@@ -1905,5 +1849,93 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       ref.read(pendingSearchMessageIdProvider.notifier).state = null;
       _showSnack('已定位到搜索结果');
     });
+  }
+
+  /// v1.2.19：单条消息气泡构建 —— 从顶层 build 抽离，供 [_MessageListView]
+  /// 复用；外层包 [RepaintBoundary]，列表滚动或父层重建时隔离单条气泡重绘。
+  Widget _buildMessageItem(BuildContext context, int index) {
+    final messages = ref.read(messagesProvider);
+    final message = messages[index];
+    final messageKey = message.id == null
+        ? null
+        : _messageKeys.putIfAbsent(message.id!, () => GlobalKey());
+    final bubble = MessageBubble(
+      isUser: message.role == 'user',
+      content: message.content,
+      status: message.status,
+      errorMessage: message.errorMessage,
+      onRetry: message.role == 'assistant' && message.status == 'error'
+          ? () => _retry(message)
+          : null,
+      reasoningContent: message.reasoningContent,
+      reasoningDurationMs: message.reasoningDurationMs,
+      reasoningTokens: message.reasoningTokens,
+      attachments: message.attachments,
+      // R3 消息操作菜单回调：
+      // 重新生成（仅已完成的助手消息）/ 编辑（仅用户消息）/
+      // 删除 / 引用；对应菜单项在回调为 null 时自动隐藏。
+      onRegenerate: message.role == 'assistant' && message.status == 'done'
+          ? () => _regenerate(message)
+          : null,
+      onEdit: message.role == 'user' ? () => _editMessage(message) : null,
+      onDelete: () => _deleteMessage(message),
+      onQuote: () => _quoteMessage(message),
+    );
+    return RepaintBoundary(
+      child: messageKey == null
+          ? bubble
+          : KeyedSubtree(key: messageKey, child: bubble),
+    );
+  }
+}
+
+/// v1.2.19：消息列表独立 Consumer 子树 —— 仅本子树 watch messagesProvider，
+/// 流式输出期间列表区域随每条增量重建，AppBar / 输入栏 / 会话参数按钮等
+/// 静态区域不再整页 rebuild，消除流式输出与滑动期间的高频全量重建开销。
+class _MessageListView extends ConsumerWidget {
+  const _MessageListView({
+    required this.scrollController,
+    required this.nearBottom,
+    required this.jumpControlsBuilder,
+    required this.itemBuilder,
+  });
+
+  final ScrollController scrollController;
+  final bool nearBottom;
+  final Widget Function(BuildContext) jumpControlsBuilder;
+  final Widget Function(BuildContext, int) itemBuilder;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final messages = ref.watch(messagesProvider);
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: messages.isEmpty
+              ? const Center(child: Text('发送第一条消息开始对话'))
+              : Center(
+                  // v1.2.0 H2：大屏聊天区限宽 760dp 居中；窄屏宽度不足时
+                  // Center 宽松约束下 ListView 自动收缩，无感知。
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 760),
+                    child: ListView.builder(
+                      controller: scrollController,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      itemCount: messages.length,
+                      itemBuilder: itemBuilder,
+                    ),
+                  ),
+                ),
+        ),
+        // v1.2.18：离底查看历史时显示悬浮定位按钮组
+        // （底部隐藏，滚动到历史位置后可见）。
+        if (!nearBottom && messages.isNotEmpty)
+          Positioned(
+            right: 12,
+            bottom: 12,
+            child: jumpControlsBuilder(context),
+          ),
+      ],
+    );
   }
 }

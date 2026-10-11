@@ -420,6 +420,24 @@ class _AttachmentView extends StatelessWidget {
 
   final MessageAttachment attachment;
 
+  /// v1.2.19：base64 解码结果静态 LRU 缓存 —— 列表滚动/重建时同一附件
+  /// 复用已解码字节（Uint8List 实例相同，Flutter ImageCache 可命中），
+  /// 避免滑动过程中反复执行 CPU 密集的 base64Decode 与图片解码。
+  static final Map<String, Uint8List> _decodedBase64 = {};
+  static const int _decodeCacheLimit = 16;
+
+  static Uint8List _decodeCached(String data) {
+    final cached = _decodedBase64[data];
+    if (cached != null) return cached;
+    final bytes = base64Decode(data);
+    if (_decodedBase64.length >= _decodeCacheLimit) {
+      // 简单 FIFO 淘汰，足够覆盖最近滑过的附件图。
+      _decodedBase64.remove(_decodedBase64.keys.first);
+    }
+    _decodedBase64[data] = bytes;
+    return bytes;
+  }
+
   @override
   Widget build(BuildContext context) {
     final att = attachment;
@@ -444,7 +462,7 @@ class _AttachmentView extends StatelessWidget {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 260, maxHeight: 240),
             child: Image.memory(
-              base64Decode(data),
+              _decodeCached(data),
               fit: BoxFit.contain,
               errorBuilder: (_, __, ___) => const _BrokenImagePlaceholder(),
             ),

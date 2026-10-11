@@ -142,7 +142,10 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
                           final isSelected = selected?.id == conversation.id;
                           // R14 长按/右键会话条目弹出操作菜单（重命名/删除等）；
                           // GestureDetector 仅拦截次级（右键）手势，不影响点选。
-                          return GestureDetector(
+                          // v1.2.19：条目包 RepaintBoundary，滚动时隔离重绘，
+                          // 避免列表滚动/paint 波及全部可见条目。
+                          return RepaintBoundary(
+                            child: GestureDetector(
                             onSecondaryTapDown: (details) =>
                                 _showConversationMenuAt(
                                     details.globalPosition, conversation),
@@ -207,6 +210,7 @@ class _SessionListPageState extends ConsumerState<SessionListPage> {
                                             conversation),
                                   ),
                           ),
+                            ),
                           );
                         },
                       ),
