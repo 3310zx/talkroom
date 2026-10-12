@@ -643,7 +643,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Future<void> _send(
       [String? preset,
       String? userInstruction,
-      bool keepOriginal = false]) async {
+      bool keepOriginal = false,
+      List<MessageAttachment>? presetAttachments]) async {
     final text = (preset ?? _inputController.text).trim();
     // R9：附件与文本可同时发送；两者皆空才拦截。
     final hasAttachments = _pendingAttachments.isNotEmpty;
@@ -653,9 +654,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (preset == null && hasAttachments) {
       await _waitForPendingParsing();
     }
+    // P2-10：重试 / 重新生成等历史重发可携带原用户消息附件（presetAttachments）。
     final attachments = preset == null
         ? List<MessageAttachment>.of(_pendingAttachments)
-        : const <MessageAttachment>[];
+        : (presetAttachments ?? const <MessageAttachment>[]);
     // v1.1.2：发送前模型多模态预检 —— 命中已知纯文本模型且携带附件时
     // 立即提示，不清空附件、不落库，避免发送后才收到 400 报错。
     if (preset == null && attachments.isNotEmpty) {
@@ -806,7 +808,21 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       final recent = history.length > _historyLimit
           ? history.sublist(history.length - _historyLimit)
           : history;
+      // P2-13：请求总长度预算 —— 已用字符（系统提示词段 + 记忆注入段）
+      // 与 history / 尾部 user 段共享上限，超限从最旧历史开始截断，
+      // 始终保留最新消息，防止单条请求撑爆模型上下文。
+      var usedChars = 0;
+      for (final seg in llmMessages) {
+        final c = seg['content'];
+        if (c is String) usedChars += c.length;
+      }
+      const reservedForTail = 4000; // 为 keepOriginal 场景的 user + 指令段预留
       for (final m in recent) {
+        if (usedChars + m.content.length + reservedForTail >
+            AppConstants.requestContextMaxChars) {
+          break;
+        }
+        usedChars += m.content.length;
         llmMessages.add({
           'role': m.role == 'user' ? 'user' : 'assistant',
           'content': m.role == 'user' && m.attachments.isNotEmpty
@@ -892,7 +908,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       }
       await _updateConversationMeta(
         conversationId,
-        _summarize(result.content),
+        // P2-05：变体保留模式不覆盖会话标题/摘要（仅刷新 updatedAt），
+        // 避免新追加的变体回复改掉原对话标题。
+        keepOriginal ? null : _summarize(result.content),
         DateTime.now().millisecondsSinceEpoch,
       );
     } on LlmException catch (e) {
@@ -1372,7 +1390,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     required String errorMessage,
   }) async {
     final id = _currentAssistantId;
-    final conv = ref.read(selectedConversationProvider);
     if (id == null) {
       if (mounted) {
         HapticFeedback.selectionClick();
@@ -1403,23 +1420,27 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     await notifier!
         .update(current.copyWith(status: status, errorMessage: errorMessage));
     if (mounted && status == 'error') HapticFeedback.selectionClick();
-    if (conv != null) {
-      await _updateConversationMeta(
-        conv.id!,
-        _summarize(current.content),
-        DateTime.now().millisecondsSinceEpoch,
-      );
-    }
+    // P2-11：error/stopped 为终态失败，不覆盖会话摘要/标题。
+    // 摘要只在成功完成（_send 第 8 步）时刷新。
   }
 
-  /// 重试：重发失败助手消息之前最近的用户消息。
-  void _retry(ChatMessage failed) {
+  /// 重试：删除失败助手消息之前最近的用户消息及其后的全部消息
+  /// （含失败回复），再用原内容 + 原附件重发。
+  /// P1-01：不再重复落库相同用户消息（先删后发，上下文干净）；
+  /// P2-10：重发时携带原用户消息的附件，避免附件丢失。
+  Future<void> _retry(ChatMessage failed) async {
+    if (_isSending) {
+      _showSnack('正在生成回复，请稍候…');
+      return;
+    }
     final msgs = ref.read(messagesProvider);
     final index = msgs.indexWhere((m) => m.id == failed.id);
     if (index < 0) return;
     for (var i = index - 1; i >= 0; i--) {
       if (msgs[i].role == 'user') {
-        _send(msgs[i].content);
+        final userMessage = msgs[i];
+        await ref.read(messagesProvider.notifier).deleteFrom(userMessage.id!);
+        await _send(userMessage.content, null, false, userMessage.attachments);
         return;
       }
     }
@@ -1471,11 +1492,22 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
     if (userMessage == null) return;
 
+    // P2-14：若该助手消息后面还有后续消息，说明它不是对话末尾——
+    // 保留模式新回复将基于「当前最新上下文」生成并追加到末尾。
+    final isLastMessage = index == msgs.length - 1;
+
     final action = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('变体重发'),
-        content: const Text('如何处理原回复？'),
+        content: Text(isLastMessage
+            ? '如何处理原回复？'
+            // P2-14：非末条助手消息的保留模式提示（删除模式同样会删掉
+            // 该回复之后的后续消息，统一在此说明）。
+            : '该回复之后还有其他消息。\n\n'
+                '「保留原回复重发」将基于当前最新上下文生成，新回复追加在对话末尾；\n'
+                '「删除原回复及其后所有消息后重发」会先删除本回复及其后的全部消息。\n\n'
+                '如何处理原回复？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop('keep'),
@@ -1483,7 +1515,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop('delete'),
-            child: const Text('删除原回复后重发'),
+            child: const Text('删除原回复及其后所有消息后重发'),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
@@ -1514,6 +1546,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
     if (conv == null || conv.id == null) {
       _showSnack('请先选择或创建会话');
+      return;
+    }
+    // P2-07：手动保存去重 —— 同一会话下相同源消息或内容完全一致时
+    // 跳过并提示，避免记忆库出现重复条目。
+    final existing =
+        await ref.read(appDatabaseProvider).memoryRepository.listByConversation(
+              conv.id!,
+            );
+    final duplicated = existing.any((e) =>
+        (e.sourceMessageId != null && e.sourceMessageId == message.id) ||
+        e.content.trim() == content);
+    if (duplicated) {
+      _showSnack('该消息已保存到记忆库');
       return;
     }
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -1622,8 +1667,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   ///
   /// H1：使用 initState 缓存的 Notifier（dispose 后 ref 不可用），
   /// 保证发送中离开页面时终态元数据仍能落库。
+  /// P2-05：summary 可空 —— 变体保留模式传入 null，仅刷新 updatedAt，
+  /// 不覆盖会话标题/摘要。
   Future<void> _updateConversationMeta(
-      int convId, String summary, int now) async {
+      int convId, String? summary, int now) async {
     Conversation? conv;
     final convs = _conversationsNotifier?.snapshot ?? const <Conversation>[];
     for (final c in convs) {
@@ -1635,7 +1682,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (conv == null) return;
     final notifier =
         _conversationsNotifier ?? ref.read(conversationsProvider.notifier);
-    await notifier!.update(conv.copyWith(lastMessage: summary, updatedAt: now));
+    if (notifier == null) return;
+    // P2-05：summary 为 null 时不改 lastMessage，仅更新时间戳。
+    await notifier.update(conv.copyWith(
+      lastMessage: summary ?? conv.lastMessage,
+      updatedAt: now,
+    ));
   }
 
   /// 当前 API 配置：会话绑定 > 首个启用 > 首个。

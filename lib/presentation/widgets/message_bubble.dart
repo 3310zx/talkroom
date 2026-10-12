@@ -187,7 +187,7 @@ class MessageBubble extends StatelessWidget {
                             'math_inline': _MathBuilder(inline: true),
                             'table': _TableBuilder(),
                             'img': _MarkdownImageBuilder(),
-                            'a': _LinkBuilder(),
+                            'a': _LinkBuilder(fgColor),
                           },
                           styleSheet: _markdownStyle(theme, fgColor),
                         ),
@@ -516,6 +516,8 @@ class _MessageActionBarState extends State<_MessageActionBar> {
     final theme = Theme.of(context);
     final isFailed = widget.status == 'error' || widget.status == 'stopped';
     final w = widget;
+    // P2-04：error/stopped 终态仅保留「重试」与「删除」，隐藏变体 /
+    // 保存记忆 / 编辑 / 引用 / 重新生成等常规操作，避免对失败内容误操作。
     final items = <Widget>[
       if (isFailed && w.onRetry != null)
         ListTile(
@@ -527,7 +529,7 @@ class _MessageActionBarState extends State<_MessageActionBar> {
             w.onRetry!();
           },
         )
-      else if (w.onRegenerate != null)
+      else if (!isFailed && w.onRegenerate != null)
         ListTile(
           leading: const Icon(Icons.refresh),
           title: const Text('重新生成'),
@@ -537,7 +539,7 @@ class _MessageActionBarState extends State<_MessageActionBar> {
             w.onRegenerate!();
           },
         ),
-      if (w.onVariantReply != null) ...[
+      if (!isFailed && w.onVariantReply != null) ...[
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
           child: Text(
@@ -574,7 +576,7 @@ class _MessageActionBarState extends State<_MessageActionBar> {
           },
         ),
       ],
-      if (w.onSaveToMemory != null)
+      if (!isFailed && w.onSaveToMemory != null)
         ListTile(
           leading: const Icon(Icons.bookmark_add_outlined),
           title: const Text('保存到记忆库'),
@@ -584,7 +586,7 @@ class _MessageActionBarState extends State<_MessageActionBar> {
             w.onSaveToMemory!();
           },
         ),
-      if (w.onEdit != null)
+      if (!isFailed && w.onEdit != null)
         ListTile(
           leading: const Icon(Icons.edit_outlined),
           title: const Text('编辑'),
@@ -604,7 +606,7 @@ class _MessageActionBarState extends State<_MessageActionBar> {
             w.onDelete!();
           },
         ),
-      if (w.onQuote != null)
+      if (!isFailed && w.onQuote != null)
         ListTile(
           leading: const Icon(Icons.format_quote),
           title: const Text('引用'),
@@ -656,6 +658,18 @@ class _MessageActionBarState extends State<_MessageActionBar> {
     final iconColor = theme.colorScheme.onSurfaceVariant;
     final liked = _reaction == 'like';
     final disliked = _reaction == 'dislike';
+    final status = widget.status;
+    // P2-04：工具栏按消息状态显隐 ——
+    // - streaming：内容未完成，隐藏复制/点赞/分享等全部图标（气泡内已有
+    //   「生成中…」指示，避免复制到半截内容）；
+    // - error/stopped：终态失败，仅保留「更多」入口（其内只含重试/删除），
+    //   不展示复制/点赞/分享等常规操作；
+    // - 其他（done / 用户消息）：完整展示。
+    final isStreaming = status == 'streaming';
+    final isFailed = status == 'error' || status == 'stopped';
+    if (isStreaming) {
+      return const SizedBox.shrink();
+    }
     return Padding(
       padding: EdgeInsets.only(
         left: widget.isUser ? 0 : 24,
@@ -666,30 +680,32 @@ class _MessageActionBarState extends State<_MessageActionBar> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _toolbarIcon(
-            icon: Icons.copy_outlined,
-            tooltip: '复制',
-            color: iconColor,
-            onPressed: _copy,
-          ),
-          _toolbarIcon(
-            icon: liked ? Icons.thumb_up : Icons.thumb_up_outlined,
-            tooltip: '点赞',
-            color: liked ? theme.colorScheme.primary : iconColor,
-            onPressed: _toggleLike,
-          ),
-          _toolbarIcon(
-            icon: disliked ? Icons.thumb_down : Icons.thumb_down_outlined,
-            tooltip: '不喜欢',
-            color: disliked ? theme.colorScheme.error : iconColor,
-            onPressed: _toggleDislike,
-          ),
-          _toolbarIcon(
-            icon: Icons.share_outlined,
-            tooltip: '分享',
-            color: iconColor,
-            onPressed: _share,
-          ),
+          if (!isFailed) ...[
+            _toolbarIcon(
+              icon: Icons.copy_outlined,
+              tooltip: '复制',
+              color: iconColor,
+              onPressed: _copy,
+            ),
+            _toolbarIcon(
+              icon: liked ? Icons.thumb_up : Icons.thumb_up_outlined,
+              tooltip: '点赞',
+              color: liked ? theme.colorScheme.primary : iconColor,
+              onPressed: _toggleLike,
+            ),
+            _toolbarIcon(
+              icon: disliked ? Icons.thumb_down : Icons.thumb_down_outlined,
+              tooltip: '不喜欢',
+              color: disliked ? theme.colorScheme.error : iconColor,
+              onPressed: _toggleDislike,
+            ),
+            _toolbarIcon(
+              icon: Icons.share_outlined,
+              tooltip: '分享',
+              color: iconColor,
+              onPressed: _share,
+            ),
+          ],
           _toolbarIcon(
             icon: Icons.more_horiz,
             tooltip: '更多操作',
@@ -1166,7 +1182,13 @@ class _MarkdownImageBuilder extends MarkdownElementBuilder {
 }
 
 /// R5：Markdown 链接渲染（点击用系统浏览器打开；长按复制链接）。
+/// P2-03：链接颜色跟随气泡前景色（fgColor），不再硬编码主题 primary，
+/// 保证深浅色与用户/助手气泡下对比度一致。
 class _LinkBuilder extends MarkdownElementBuilder {
+  _LinkBuilder(this.fgColor);
+
+  final Color fgColor;
+
   @override
   bool isBlockElement() => false;
 
@@ -1183,11 +1205,13 @@ class _LinkBuilder extends MarkdownElementBuilder {
       return Text(text, style: preferredStyle ?? parentStyle);
     }
     final theme = Theme.of(context);
+    // P2-03：链接颜色跟随气泡前景色，深浅色/用户气泡下均可读；
+    // 下划线仍保留以维持「可点击」语义。
     final linkStyle =
         (preferredStyle ?? parentStyle ?? theme.textTheme.bodyMedium)?.copyWith(
-      color: theme.colorScheme.primary,
+      color: fgColor,
       decoration: TextDecoration.underline,
-      decorationColor: theme.colorScheme.primary,
+      decorationColor: fgColor,
     );
     return GestureDetector(
       onTap: () => _openLink(context, href),

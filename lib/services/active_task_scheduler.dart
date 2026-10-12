@@ -360,24 +360,24 @@ class ActiveTaskScheduler {
     int nowMs,
   ) async {
     final cursorKey = 'memory_summary_cursor_$conversationId';
-    final cursor = int.tryParse(settings[cursorKey] ?? '0') ?? 0;
+    // P2-06：复合游标 (createdAt, id)，避免同一毫秒内多条消息被跳过。
+    // 兼容老游标：旧版仅存 createdAt 纯数字，此时按 id=0（即该时刻
+    // 全部消息重新纳入候选，最坏仅重复整理一次，不丢数据）。
+    final cursor = parseMemorySummaryCursor(settings[cursorKey] ?? '');
 
     final all = await _messageRepository.listByConversation(conversationId);
     final candidates = all
-        .where((m) => m.status == 'done' && m.createdAt > cursor)
+        .where((m) =>
+            m.status == 'done' &&
+            (m.createdAt > cursor.createdAt ||
+                (m.createdAt == cursor.createdAt && (m.id ?? 0) > cursor.id)))
         .toList();
     if (candidates.isEmpty) return 0;
 
     // 截断：上限 50 条 / 8000 字（功能四常量）。
-    var chars = 0;
-    final picked = <ChatMessage>[];
-    for (final m in candidates.take(AppConstants.memorySummaryMaxMessages)) {
-      final content = m.content.trim();
-      if (content.isEmpty) continue;
-      if (chars + content.length > AppConstants.memorySummaryMaxChars) break;
-      chars += content.length;
-      picked.add(m);
-    }
+    // P2-09：单条超长消息不再卡死游标 —— 超长内容截断到剩余预算后
+    // 纳入整理，游标照常推进；后续消息不会被超长单条阻断。
+    final picked = truncateMemorySummaryCandidates(candidates);
     if (picked.isEmpty) return 0;
 
     final messages = _buildMemorySummaryMessages(picked, settings);
@@ -414,8 +414,11 @@ class ActiveTaskScheduler {
       inserted++;
     }
 
-    // 推进游标到最后一条已处理消息，避免下次重复整理。
-    await _settingsRepository.setValue(cursorKey, picked.last.createdAt.toString());
+    // 推进游标到最后一条已处理消息（复合游标 createdAt:id，P2-06），
+    // 同毫秒内多条消息也能精确续跑，避免下次重复整理或跳过。
+    final last = picked.last;
+    await _settingsRepository
+        .setValue(cursorKey, formatMemorySummaryCursor(last.createdAt, last.id));
     return inserted;
   }
 
@@ -446,11 +449,14 @@ class ActiveTaskScheduler {
 
   /// 简单文本重叠判定：包含关系视为重叠；否则用字符集合 Jaccard 相似度
   /// 超过阈值（默认 30%）视为重叠。
+  /// P2-08：短文本（<10 字）禁用 Jaccard（字符集合重合率对短文本过于
+  /// 敏感，容易误判重复），仅用包含/相等关系判断；长文本才走 Jaccard。
   bool _memoryOverlap(String existing, String candidate) {
     final a = existing.trim();
     final b = candidate.trim();
     if (a.isEmpty || b.isEmpty) return false;
     if (a.contains(b) || b.contains(a)) return true;
+    if (a.length < 10 || b.length < 10) return false;
     final setA = a.split('').toSet();
     final setB = b.split('').toSet();
     if (setA.isEmpty || setB.isEmpty) return false;
@@ -590,4 +596,65 @@ class ActiveTaskScheduler {
 
   /// 会话列表摘要：去 Markdown 标记后的纯文本，截断 40 字。
   String _summarize(String text) => summarize(text);
+}
+
+/// P2-06：memory_summary 复合游标 (createdAt, id) 解析。
+///
+/// 兼容老游标：旧版仅存 createdAt 纯数字（无冒号），此时 id 视为 0，
+/// 同毫秒消息会重新纳入候选（最坏仅重复整理一次，不丢数据）。
+({int createdAt, int id}) parseMemorySummaryCursor(String raw) {
+  if (raw.contains(':')) {
+    final parts = raw.split(':');
+    return (
+      createdAt: int.tryParse(parts[0]) ?? 0,
+      id: int.tryParse(parts[1]) ?? 0,
+    );
+  }
+  return (createdAt: int.tryParse(raw) ?? 0, id: 0);
+}
+
+/// P2-06：memory_summary 复合游标序列化（`createdAt:id`）。
+String formatMemorySummaryCursor(int createdAt, int? id) =>
+    '$createdAt:${id ?? 0}';
+
+/// P2-09：memory_summary 候选截断 —— 单条超长消息截断到剩余预算后仍
+/// 纳入整理（游标照常推进，不会卡死）；预算耗尽后停止追加。
+List<ChatMessage> truncateMemorySummaryCandidates(
+  List<ChatMessage> candidates, {
+  int maxMessages = AppConstants.memorySummaryMaxMessages,
+  int maxChars = AppConstants.memorySummaryMaxChars,
+}) {
+  var chars = 0;
+  final picked = <ChatMessage>[];
+  for (final m in candidates.take(maxMessages)) {
+    var content = m.content.trim();
+    if (content.isEmpty) continue;
+    if (chars >= maxChars) break;
+    final room = maxChars - chars;
+    if (content.length > room) {
+      content = content.substring(0, room);
+    }
+    chars += content.length;
+    picked.add(m.copyWith(content: content));
+  }
+  return picked;
+}
+
+/// P2-08：记忆文本重叠判定。包含关系视为重叠；任一文本短于 10 字时
+/// 禁用 Jaccard（字符集合重合率对短文本过于敏感，易误判重复），仅用
+/// 包含/相等关系判断；长文本用字符集合 Jaccard 相似度超过默认 30%
+/// 视为重叠。
+bool memoryOverlap(String existing, String candidate) {
+  final a = existing.trim();
+  final b = candidate.trim();
+  if (a.isEmpty || b.isEmpty) return false;
+  if (a.contains(b) || b.contains(a)) return true;
+  if (a.length < 10 || b.length < 10) return false;
+  final setA = a.split('').toSet();
+  final setB = b.split('').toSet();
+  if (setA.isEmpty || setB.isEmpty) return false;
+  final inter = setA.intersection(setB).length;
+  final union = setA.union(setB).length;
+  if (union == 0) return false;
+  return inter / union >= AppConstants.memorySummaryOverlapRatio;
 }

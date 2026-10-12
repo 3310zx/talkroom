@@ -115,6 +115,11 @@ abstract final class AppConstants {
   static const int memoryInjectMaxCount = 5;
   /// 请求组装时注入记忆的文本总字数上限（决策 D6）。
   static const int memoryInjectMaxChars = 2000;
+
+  /// P2-13：单次请求组装的总长度预算（字符）。
+  /// history + 记忆 + 系统提示词等所有段共享此上限，超限从最旧历史
+  /// 开始截断，防止请求超出模型上下文窗口。
+  static const int requestContextMaxChars = 120000;
   /// 自动整理单轮取消息上限（功能四）。
   static const int memorySummaryMaxMessages = 50;
   /// 自动整理单轮取消息文本总字数上限（功能四）。
