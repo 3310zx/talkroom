@@ -89,142 +89,181 @@ class MessageBubble extends StatelessWidget {
     final isError = status == 'error';
     final isStreaming = status == 'streaming';
     final isStopped = status == 'stopped';
-    final hasReasoning = reasoningContent != null && reasoningContent!.isNotEmpty;
+    final hasReasoning =
+        reasoningContent != null && reasoningContent!.isNotEmpty;
 
     final bubbleColor = isError
         ? theme.colorScheme.errorContainer
         : isUser
             ? theme.colorScheme.primaryContainer
             : theme.colorScheme.surfaceContainerHighest;
+    // 暗色模式对比度修复：气泡前景文字必须使用对应的「on」语义色。
+    // 用户消息（primaryContainer 底）→ onPrimaryContainer；错误消息
+    // （errorContainer 底）→ onErrorContainer；助手消息（surface 底）→
+    // onSurface。此前气泡内文字继承 onSurface——暗色 / Monet 动态取色下
+    // M3 的 primaryContainer 为亮浅蓝，浅色文字叠浅蓝背景对比度严重不足。
+    final fgColor = isError
+        ? theme.colorScheme.onErrorContainer
+        : isUser
+            ? theme.colorScheme.onPrimaryContainer
+            : theme.colorScheme.onSurface;
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        onLongPress: () => _showActionMenu(context),
-        child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          constraints: const BoxConstraints(maxWidth: 560),
-          decoration: BoxDecoration(
-            color: bubbleColor,
-            border: isError
-                ? Border.all(color: theme.colorScheme.error, width: 1)
-                : null,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // R9：用户消息附件（图片缩略图 / 文件卡片）。
-              if (attachments.isNotEmpty) ...[
-                for (final att in attachments)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: _AttachmentView(attachment: att),
-                  ),
-                if (content.trim().isNotEmpty)
-                  const SizedBox(height: 2),
-              ],
-              // 思维链折叠卡片：灰色底、斜体小字、分隔线，与正文明显区分。
-              if (hasReasoning && !isUser) ...[
-                _ReasoningCard(
-                  content: reasoningContent!,
-                  durationMs: reasoningDurationMs,
-                  tokens: reasoningTokens,
-                ),
-                if (content.trim().isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Divider(
-                      height: 1,
-                      color: theme.colorScheme.outlineVariant,
-                    ),
-                  ),
-              ],
-              // 统一渲染：用户消息与助手消息都经 flutter_markdown 渲染，
-              // 避免标题/列表/加粗等基础语法在部分消息中显示为原始标记符号。
-              // 数学公式（R1）：注册 math_block / math_inline 语法与构建器，
-              // 块级 $$...$$ 与行内 $...$ 渲染为公式形态而非纯文本。
-              // v1.0.18 修复：气泡 shrink-wrap 导致 MarkdownBody 处于无界宽度
-              // 环境，列表/长文本不换行被裁切或与相邻元素重叠；用
-              // SizedBox(width: double.infinity) 提供有界宽度，使其正常换行。
-              if (content.trim().isNotEmpty)
-                SizedBox(
-                  width: double.infinity,
-                  child: MarkdownBody(
-                    data: content,
-                    selectable: true,
-                    extensionSet: md.ExtensionSet(
-                      md.ExtensionSet.gitHubFlavored.blockSyntaxes +
-                          [_MathBlockSyntax()],
-                      md.ExtensionSet.gitHubFlavored.inlineSyntaxes +
-                          [_MathInlineSyntax()],
-                    ),
-                    builders: {
-                      'pre': _CodeBlockBuilder(),
-                      'math_block': _MathBuilder(inline: false),
-                      'math_inline': _MathBuilder(inline: true),
-                      'table': _TableBuilder(),
-                      'img': _MarkdownImageBuilder(),
-                      'a': _LinkBuilder(),
-                    },
-                    styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-                      p: theme.textTheme.bodyLarge,
-                    ),
-                  ),
-                )
-              else if (!hasReasoning)
-                Text(
-                  isStreaming ? '正在思考…' : '',
-                  style: theme.textTheme.bodyLarge,
-                ),
-              if (isStreaming)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const SizedBox(
-                        width: 12,
-                        height: 12,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      const SizedBox(width: 6),
-                      const Text('生成中…', style: TextStyle(fontSize: 12)),
+      child: Column(
+        crossAxisAlignment:
+            isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            onLongPress: () {
+              HapticFeedback.heavyImpact();
+              _showActionMenu(context);
+            },
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              constraints: const BoxConstraints(maxWidth: 560),
+              decoration: BoxDecoration(
+                color: bubbleColor,
+                border: isError
+                    ? Border.all(color: theme.colorScheme.error, width: 1)
+                    : null,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: DefaultTextStyle(
+                style: theme.textTheme.bodyLarge!.copyWith(color: fgColor),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // R9：用户消息附件（图片缩略图 / 文件卡片）。
+                    if (attachments.isNotEmpty) ...[
+                      for (final att in attachments)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: _AttachmentView(attachment: att),
+                        ),
+                      if (content.trim().isNotEmpty) const SizedBox(height: 2),
                     ],
-                  ),
+                    // 思维链折叠卡片：灰色底、斜体小字、分隔线，与正文明显区分。
+                    if (hasReasoning && !isUser) ...[
+                      _ReasoningCard(
+                        content: reasoningContent!,
+                        durationMs: reasoningDurationMs,
+                        tokens: reasoningTokens,
+                      ),
+                      if (content.trim().isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Divider(
+                            height: 1,
+                            color: theme.colorScheme.outlineVariant,
+                          ),
+                        ),
+                    ],
+                    // 统一渲染：用户消息与助手消息都经 flutter_markdown 渲染，
+                    // 避免标题/列表/加粗等基础语法在部分消息中显示为原始标记符号。
+                    // 数学公式（R1）：注册 math_block / math_inline 语法与构建器，
+                    // 块级 $$...$$ 与行内 $...$ 渲染为公式形态而非纯文本。
+                    // v1.0.18 修复：气泡 shrink-wrap 导致 MarkdownBody 处于无界宽度
+                    // 环境，列表/长文本不换行被裁切或与相邻元素重叠；用
+                    // SizedBox(width: double.infinity) 提供有界宽度，使其正常换行。
+                    if (content.trim().isNotEmpty)
+                      SizedBox(
+                        width: double.infinity,
+                        child: MarkdownBody(
+                          data: content,
+                          selectable: true,
+                          extensionSet: md.ExtensionSet(
+                            md.ExtensionSet.gitHubFlavored.blockSyntaxes +
+                                [_MathBlockSyntax()],
+                            md.ExtensionSet.gitHubFlavored.inlineSyntaxes +
+                                [_MathInlineSyntax()],
+                          ),
+                          builders: {
+                            'pre': _CodeBlockBuilder(),
+                            'math_block': _MathBuilder(inline: false),
+                            'math_inline': _MathBuilder(inline: true),
+                            'table': _TableBuilder(),
+                            'img': _MarkdownImageBuilder(),
+                            'a': _LinkBuilder(),
+                          },
+                          styleSheet: _markdownStyle(theme, fgColor),
+                        ),
+                      )
+                    else if (!hasReasoning)
+                      Text(
+                        isStreaming ? '正在思考…' : '',
+                        style: theme.textTheme.bodyLarge,
+                      ),
+                    if (isStreaming)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(
+                              width: 12,
+                              height: 12,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            const SizedBox(width: 6),
+                            const Text('生成中…', style: TextStyle(fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                    if (isStopped)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          '已停止生成',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: fgColor.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ),
+                    if (isError && errorMessage != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          errorMessage!,
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: theme.colorScheme.onErrorContainer),
+                        ),
+                      ),
+                    if (isError && onRetry != null)
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: onRetry,
+                          child: const Text('重试'),
+                        ),
+                      ),
+                  ],
                 ),
-              if (isStopped)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    '已停止生成',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              if (isError && errorMessage != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    errorMessage!,
-                    style: TextStyle(fontSize: 12, color: theme.colorScheme.error),
-                  ),
-                ),
-              if (isError && onRetry != null)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton(
-                    onPressed: onRetry,
-                    child: const Text('重试'),
-                  ),
-                ),
-            ],
+              ),
+            ),
           ),
-        ),
+          // 消息操作工具栏（R11）：气泡下方图标栏，复制 / 点赞 / 不喜欢 /
+          // 分享 / 更多（三点）。「更多」二级菜单承载重试、变体、保存记忆、
+          // 重新生成、编辑、删除、引用等；长按菜单保留作为辅助入口。
+          _MessageActionBar(
+            isUser: isUser,
+            content: content,
+            status: status,
+            onRetry: onRetry,
+            onRegenerate: onRegenerate,
+            onVariantReply: onVariantReply,
+            onSaveToMemory: onSaveToMemory,
+            onEdit: onEdit,
+            onDelete: onDelete,
+            onQuote: onQuote,
+            onCopy: () => _copyContent(context),
+          ),
+        ],
       ),
     );
   }
@@ -242,6 +281,7 @@ class MessageBubble extends StatelessWidget {
         title: const Text('复制'),
         onTap: () {
           Navigator.of(context).pop();
+          HapticFeedback.lightImpact();
           _copyContent(context);
         },
       ),
@@ -375,11 +415,310 @@ class MessageBubble extends StatelessWidget {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('已复制'), duration: Duration(seconds: 1)));
+      ..showSnackBar(
+          const SnackBar(content: Text('已复制'), duration: Duration(seconds: 1)));
+  }
+
+  /// Markdown 样式：将全部文本元素前景色统一为气泡前景语义色
+  /// （onPrimaryContainer / onSurface / onErrorContainer），确保暗色模式 /
+  /// Monet 动态取色下浅色文字不再叠浅蓝容器背景，标题、引用、行内代码、
+  /// 表格等子元素与正文保持同一前景色，对比度始终达标。
+  static MarkdownStyleSheet _markdownStyle(ThemeData theme, Color fgColor) {
+    final base = MarkdownStyleSheet.fromTheme(theme);
+    TextStyle? withFg(TextStyle? s) => s?.copyWith(color: fgColor);
+    return base.copyWith(
+      p: withFg(base.p),
+      h1: withFg(base.h1),
+      h2: withFg(base.h2),
+      h3: withFg(base.h3),
+      h4: withFg(base.h4),
+      h5: withFg(base.h5),
+      h6: withFg(base.h6),
+      em: withFg(base.em),
+      strong: withFg(base.strong),
+      del: withFg(base.del),
+      blockquote: withFg(base.blockquote),
+      code: withFg(base.code),
+      listBullet: withFg(base.listBullet),
+      tableHead: withFg(base.tableHead),
+      tableBody: withFg(base.tableBody),
+      a: withFg(base.a)?.copyWith(decoration: TextDecoration.underline),
+    );
   }
 }
 
-/// 思维链折叠卡片（默认收起，点击标题展开/收起）。
+/// 消息操作工具栏（R11）：气泡下方图标栏 —— 复制 / 点赞 / 不喜欢 / 分享 /
+/// 更多（三点）。「更多」展开二级底部菜单，承载重试、变体、保存记忆、
+/// 重新生成、编辑、删除、引用等动作；长按气泡菜单保留作为辅助入口。
+/// 点赞 / 不喜欢为会话内即时反馈（互斥切换，不持久化）。
+class _MessageActionBar extends StatefulWidget {
+  const _MessageActionBar({
+    required this.isUser,
+    required this.content,
+    this.status,
+    this.onRetry,
+    this.onRegenerate,
+    this.onVariantReply,
+    this.onSaveToMemory,
+    this.onEdit,
+    this.onDelete,
+    this.onQuote,
+    this.onCopy,
+  });
+
+  final bool isUser;
+  final String content;
+  final String? status;
+  final VoidCallback? onRetry;
+  final VoidCallback? onRegenerate;
+  final void Function(String instruction)? onVariantReply;
+  final VoidCallback? onSaveToMemory;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
+  final VoidCallback? onQuote;
+  final VoidCallback? onCopy;
+
+  @override
+  State<_MessageActionBar> createState() => _MessageActionBarState();
+}
+
+class _MessageActionBarState extends State<_MessageActionBar> {
+  /// 点赞 / 不喜欢反馈状态：none / like / dislike（互斥）。
+  String _reaction = 'none';
+
+  void _toggleLike() {
+    HapticFeedback.mediumImpact();
+    setState(() => _reaction = _reaction == 'like' ? 'none' : 'like');
+    _toast(_reaction == 'like' ? '已点赞' : '已取消点赞');
+  }
+
+  void _toggleDislike() {
+    HapticFeedback.mediumImpact();
+    setState(() => _reaction = _reaction == 'dislike' ? 'none' : 'dislike');
+    _toast(_reaction == 'dislike' ? '已不喜欢' : '已取消不喜欢');
+  }
+
+  void _copy() {
+    HapticFeedback.lightImpact();
+    widget.onCopy?.call();
+  }
+
+  Future<void> _share() async {
+    HapticFeedback.lightImpact();
+    await Share.share(
+      widget.content,
+      subject: 'Talkroom 消息',
+    );
+  }
+
+  void _showMoreMenu() {
+    HapticFeedback.selectionClick();
+    final theme = Theme.of(context);
+    final isFailed = widget.status == 'error' || widget.status == 'stopped';
+    final w = widget;
+    final items = <Widget>[
+      if (isFailed && w.onRetry != null)
+        ListTile(
+          leading: const Icon(Icons.refresh),
+          title: const Text('重试'),
+          onTap: () {
+            Navigator.of(context).pop();
+            HapticFeedback.mediumImpact();
+            w.onRetry!();
+          },
+        )
+      else if (w.onRegenerate != null)
+        ListTile(
+          leading: const Icon(Icons.refresh),
+          title: const Text('重新生成'),
+          onTap: () {
+            Navigator.of(context).pop();
+            HapticFeedback.mediumImpact();
+            w.onRegenerate!();
+          },
+        ),
+      if (w.onVariantReply != null) ...[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+          child: Text(
+            '变体回复',
+            style: theme.textTheme.labelMedium
+                ?.copyWith(color: theme.colorScheme.outline),
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.notes),
+          title: const Text('更详尽地回答'),
+          onTap: () {
+            Navigator.of(context).pop();
+            HapticFeedback.mediumImpact();
+            w.onVariantReply!('请基于上一问给出更详尽、更完整的回答');
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.compress),
+          title: const Text('更简洁地回答'),
+          onTap: () {
+            Navigator.of(context).pop();
+            HapticFeedback.mediumImpact();
+            w.onVariantReply!('请用更简洁的方式重新回答，避免冗长');
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.face_retouching_natural),
+          title: const Text('更个性化的回答'),
+          onTap: () {
+            Navigator.of(context).pop();
+            HapticFeedback.mediumImpact();
+            w.onVariantReply!('请用更有个性、更有个人风格与温度的方式重新回答');
+          },
+        ),
+      ],
+      if (w.onSaveToMemory != null)
+        ListTile(
+          leading: const Icon(Icons.bookmark_add_outlined),
+          title: const Text('保存到记忆库'),
+          onTap: () {
+            Navigator.of(context).pop();
+            HapticFeedback.mediumImpact();
+            w.onSaveToMemory!();
+          },
+        ),
+      if (w.onEdit != null)
+        ListTile(
+          leading: const Icon(Icons.edit_outlined),
+          title: const Text('编辑'),
+          onTap: () {
+            Navigator.of(context).pop();
+            HapticFeedback.mediumImpact();
+            w.onEdit!();
+          },
+        ),
+      if (w.onDelete != null)
+        ListTile(
+          leading: Icon(Icons.delete_outline, color: theme.colorScheme.error),
+          title: Text('删除', style: TextStyle(color: theme.colorScheme.error)),
+          onTap: () {
+            Navigator.of(context).pop();
+            HapticFeedback.heavyImpact();
+            w.onDelete!();
+          },
+        ),
+      if (w.onQuote != null)
+        ListTile(
+          leading: const Icon(Icons.format_quote),
+          title: const Text('引用'),
+          onTap: () {
+            Navigator.of(context).pop();
+            HapticFeedback.lightImpact();
+            w.onQuote!();
+          },
+        ),
+    ];
+    if (items.isEmpty) return;
+
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+              child: Text(
+                '更多操作',
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold),
+              ),
+            ),
+            ...items,
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _toast(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 1),
+      ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final iconColor = theme.colorScheme.onSurfaceVariant;
+    final liked = _reaction == 'like';
+    final disliked = _reaction == 'dislike';
+    return Padding(
+      padding: EdgeInsets.only(
+        left: widget.isUser ? 0 : 24,
+        right: widget.isUser ? 24 : 0,
+        top: 2,
+        bottom: 2,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _toolbarIcon(
+            icon: Icons.copy_outlined,
+            tooltip: '复制',
+            color: iconColor,
+            onPressed: _copy,
+          ),
+          _toolbarIcon(
+            icon: liked ? Icons.thumb_up : Icons.thumb_up_outlined,
+            tooltip: '点赞',
+            color: liked ? theme.colorScheme.primary : iconColor,
+            onPressed: _toggleLike,
+          ),
+          _toolbarIcon(
+            icon: disliked ? Icons.thumb_down : Icons.thumb_down_outlined,
+            tooltip: '不喜欢',
+            color: disliked ? theme.colorScheme.error : iconColor,
+            onPressed: _toggleDislike,
+          ),
+          _toolbarIcon(
+            icon: Icons.share_outlined,
+            tooltip: '分享',
+            color: iconColor,
+            onPressed: _share,
+          ),
+          _toolbarIcon(
+            icon: Icons.more_horiz,
+            tooltip: '更多操作',
+            color: iconColor,
+            onPressed: _showMoreMenu,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _toolbarIcon({
+    required IconData icon,
+    required String tooltip,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return IconButton(
+      onPressed: onPressed,
+      tooltip: tooltip,
+      icon: Icon(icon, size: 18),
+      color: color,
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.all(4),
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+    );
+  }
+}
+
 ///
 /// 样式刻意与正文区分：灰色圆角底、斜体小字、标题行显示
 /// 「思考过程 · 用时 X.Xs · 消耗 N tokens」，防止与正文混淆。
@@ -437,7 +776,9 @@ class _ReasoningCardState extends State<_ReasoningCard> {
               child: Row(
                 children: [
                   Icon(
-                    _expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+                    _expanded
+                        ? Icons.keyboard_arrow_down
+                        : Icons.keyboard_arrow_right,
                     size: 16,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -719,6 +1060,10 @@ class _TableBuilder extends MarkdownElementBuilder {
     final theme = Theme.of(context);
     final borderColor = theme.colorScheme.outlineVariant;
     final headerBg = theme.colorScheme.surfaceContainerHighest;
+    // 表格文字跟随气泡前景语义色（DefaultTextStyle 已注入），避免暗色下
+    // 浅色文字叠浅蓝容器背景对比度不足。
+    final fgColor =
+        DefaultTextStyle.of(context).style.color ?? theme.colorScheme.onSurface;
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
@@ -742,16 +1087,18 @@ class _TableBuilder extends MarkdownElementBuilder {
               children: [
                 for (var c = 0; c < colCount; c++)
                   Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                     child: c < rows[r].length
                         ? Text(
                             rows[r][c].textContent.trim(),
                             style: rows[r][c].tag == 'th'
-                                ? (preferredStyle ??
-                                        theme.textTheme.bodyMedium)
-                                    ?.copyWith(fontWeight: FontWeight.bold)
-                                : preferredStyle ?? theme.textTheme.bodyMedium,
+                                ? (preferredStyle ?? theme.textTheme.bodyMedium)
+                                    ?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                        color: fgColor)
+                                : (preferredStyle ?? theme.textTheme.bodyMedium)
+                                    ?.copyWith(color: fgColor),
                           )
                         : const SizedBox(),
                   ),
@@ -836,8 +1183,8 @@ class _LinkBuilder extends MarkdownElementBuilder {
       return Text(text, style: preferredStyle ?? parentStyle);
     }
     final theme = Theme.of(context);
-    final linkStyle = (preferredStyle ?? parentStyle ?? theme.textTheme.bodyMedium)
-        ?.copyWith(
+    final linkStyle =
+        (preferredStyle ?? parentStyle ?? theme.textTheme.bodyMedium)?.copyWith(
       color: theme.colorScheme.primary,
       decoration: TextDecoration.underline,
       decorationColor: theme.colorScheme.primary,
@@ -1039,7 +1386,8 @@ class _CodeBlockViewState extends State<_CodeBlockView> {
                   onTap: _copied ? null : _copy,
                   borderRadius: BorderRadius.circular(4),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1137,14 +1485,18 @@ class _MathBuilder extends MarkdownElementBuilder {
   ) {
     final tex = element.textContent.trim();
     if (tex.isEmpty) return null;
+    final theme = Theme.of(context);
+    final fgColor =
+        DefaultTextStyle.of(context).style.color ?? theme.colorScheme.onSurface;
     return Padding(
-      padding: inline ? EdgeInsets.zero : const EdgeInsets.symmetric(vertical: 4),
+      padding:
+          inline ? EdgeInsets.zero : const EdgeInsets.symmetric(vertical: 4),
       child: Math.tex(
         tex,
         mathStyle: inline ? MathStyle.text : MathStyle.display,
         textStyle: TextStyle(
           fontSize: inline ? 14 : 16,
-          color: Theme.of(context).colorScheme.onSurface,
+          color: fgColor,
         ),
       ),
     );

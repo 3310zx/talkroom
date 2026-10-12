@@ -333,23 +333,21 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 );
               },
             ),
-            // Talkroom macOS 桌面端：详情面板展开/收起（两栏默认隐藏）。
-            // 断点与 home_page 一致（>=1000），窄窗口不显示按钮避免挤压。
-            if (AppPlatform.isMacOS &&
-                MediaQuery.of(context).size.width >= 1000)
-              IconButton(
-                icon: Icon(
-                  ref.watch(detailPanelVisibleProvider)
-                      ? Icons.info
-                      : Icons.info_outline,
-                ),
-                tooltip: '详情面板',
-                onPressed: () {
-                  final notifier =
-                      ref.read(detailPanelVisibleProvider.notifier);
-                  notifier.state = !notifier.state;
-                },
+          // Talkroom macOS 桌面端：详情面板展开/收起（两栏默认隐藏）。
+          // 断点与 home_page 一致（>=1000），窄窗口不显示按钮避免挤压。
+          if (AppPlatform.isMacOS && MediaQuery.of(context).size.width >= 1000)
+            IconButton(
+              icon: Icon(
+                ref.watch(detailPanelVisibleProvider)
+                    ? Icons.info
+                    : Icons.info_outline,
               ),
+              tooltip: '详情面板',
+              onPressed: () {
+                final notifier = ref.read(detailPanelVisibleProvider.notifier);
+                notifier.state = !notifier.state;
+              },
+            ),
         ],
       ),
       body: Column(
@@ -363,8 +361,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       : _MessageListView(
                           scrollController: _scrollController,
                           nearBottom: _nearBottom,
-                          jumpControlsBuilder: (ctx) =>
-                              _buildJumpControls(ctx),
+                          jumpControlsBuilder: (ctx) => _buildJumpControls(ctx),
                           itemBuilder: (context, index) =>
                               _buildMessageItem(context, index),
                         ),
@@ -489,8 +486,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                     Icon(
                                       Icons.insert_drive_file_outlined,
                                       size: 22,
-                                      color:
-                                          theme.colorScheme.onSurfaceVariant,
+                                      color: theme.colorScheme.onSurfaceVariant,
                                     ),
                                     if (att.parseStatus != 'none')
                                       Text(
@@ -499,12 +495,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                           fontSize: 9,
                                           height: 1.2,
                                           color: att.parseStatus == 'failed'
-                                              ? theme
-                                                  .colorScheme
-                                                  .error
+                                              ? theme.colorScheme.error
                                               : theme
-                                                  .colorScheme
-                                                  .onSurfaceVariant,
+                                                  .colorScheme.onSurfaceVariant,
                                         ),
                                       ),
                                   ],
@@ -648,7 +641,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   /// 均已存在，跳过重复落库用户消息、不再追加重复 user 段，仅注入指令
   /// 重发，新回复作为新消息追加，不污染原回复。
   Future<void> _send(
-      [String? preset, String? userInstruction, bool keepOriginal = false]) async {
+      [String? preset,
+      String? userInstruction,
+      bool keepOriginal = false]) async {
     final text = (preset ?? _inputController.text).trim();
     // R9：附件与文本可同时发送；两者皆空才拦截。
     final hasAttachments = _pendingAttachments.isNotEmpty;
@@ -916,6 +911,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   /// 停止生成：取消当前 CancelToken，流式请求抛出 cancelled 后进入停止态。
   void _stop() {
+    HapticFeedback.selectionClick();
     _cancelToken?.cancel();
   }
 
@@ -1213,9 +1209,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         dataBase64: dataBase64,
         textPreview: preview,
         // v1.2.1：可解析类型在 pick 后立即异步解析，其余保持 none。
-        parseStatus: AttachmentParser.isParsableName(file.name)
-            ? 'parsing'
-            : 'none',
+        parseStatus:
+            AttachmentParser.isParsableName(file.name) ? 'parsing' : 'none',
       );
       setState(() {
         _pendingAttachments.add(attachment);
@@ -1260,8 +1255,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Future<void> _parsePendingAttachmentBytes(
       MessageAttachment attachment, Uint8List bytes) async {
     try {
-      final result = await AttachmentParser.parseInBackgroundBytes(
-          bytes, attachment.name);
+      final result =
+          await AttachmentParser.parseInBackgroundBytes(bytes, attachment.name);
       _updatePendingAttachment(
         attachment,
         parsedText: result.text,
@@ -1380,6 +1375,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final conv = ref.read(selectedConversationProvider);
     if (id == null) {
       if (mounted) {
+        HapticFeedback.selectionClick();
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(errorMessage)));
       }
@@ -1406,6 +1402,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     notifier?.flushStreaming();
     await notifier!
         .update(current.copyWith(status: status, errorMessage: errorMessage));
+    if (mounted && status == 'error') HapticFeedback.selectionClick();
     if (conv != null) {
       await _updateConversationMeta(
         conv.id!,
@@ -1530,6 +1527,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         ));
     // 刷新会话详情面板中的记忆列表。
     ref.read(memoriesProvider.notifier).loadForConversation(conv.id!);
+    HapticFeedback.mediumImpact();
     _showSnack('已保存到记忆库');
   }
 
@@ -1601,6 +1599,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       ),
     );
     if (confirmed != true) return;
+    HapticFeedback.heavyImpact();
     if (message.id != null && message.id == _currentAssistantId) {
       _stop();
     }
@@ -1916,9 +1915,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
     final targetIndex = topIndex - 1;
     final target = messages[targetIndex];
-    final ctx = target.id == null
-        ? null
-        : _messageKeys[target.id]?.currentContext;
+    final ctx =
+        target.id == null ? null : _messageKeys[target.id]?.currentContext;
     if (ctx != null) {
       Scrollable.ensureVisible(
         ctx,
@@ -2043,9 +2041,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         _messageItemSource.clear();
       }
     }
-    final messageKey = id == null
-        ? null
-        : _messageKeys.putIfAbsent(id, () => GlobalKey());
+    final messageKey =
+        id == null ? null : _messageKeys.putIfAbsent(id, () => GlobalKey());
     final bubble = MessageBubble(
       isUser: message.role == 'user',
       content: message.content,
@@ -2065,10 +2062,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           ? () => _regenerate(message)
           : null,
       // 功能一：消息变体（仅已完成助手消息）；功能三：保存到记忆库（助手消息）。
-      onVariantReply:
-          message.role == 'assistant' && message.status == 'done'
-              ? (instruction) => _sendWithVariant(message, instruction)
-              : null,
+      onVariantReply: message.role == 'assistant' && message.status == 'done'
+          ? (instruction) => _sendWithVariant(message, instruction)
+          : null,
       onSaveToMemory: message.role == 'assistant' && message.status == 'done'
           ? () => _saveMessageToMemory(message)
           : null,
