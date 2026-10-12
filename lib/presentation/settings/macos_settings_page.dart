@@ -5,8 +5,10 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../application/providers/active_tasks_provider.dart';
 import '../../application/providers/api_configs_provider.dart';
+import '../../application/providers/conversations_provider.dart';
 import '../../application/providers/database_provider.dart';
 import '../../application/providers/local_server_provider.dart';
+import '../../application/providers/memories_provider.dart';
 import '../../application/providers/prompt_templates_provider.dart';
 import '../../application/providers/settings_provider.dart';
 import '../../core/constants.dart';
@@ -16,6 +18,7 @@ import '../../data/preset_providers.dart';
 import '../../domain/models/active_task.dart';
 import '../../domain/models/active_task_schedule.dart';
 import '../../domain/models/api_config.dart';
+import '../../domain/models/memory_item.dart';
 import '../../domain/models/message.dart';
 import '../../domain/models/prompt_template.dart';
 import '../../services/update_service.dart';
@@ -46,6 +49,7 @@ enum _Section {
   api('API 服务', Icons.dns_outlined),
   defaultParams('默认参数', Icons.tune),
   systemPrompt('System Prompt', Icons.person_outline),
+  memories('记忆库', Icons.bookmark_outline),
   activeTasks('主动消息', Icons.notifications_active_outlined),
   localServer('本地服务', Icons.lan_outlined),
   performance('性能', Icons.speed_outlined),
@@ -174,6 +178,7 @@ class _MacosSettingsPageState extends ConsumerState<MacosSettingsPage> {
       _Section.api => const _ApiPanel(),
       _Section.defaultParams => const _DefaultParamsPanel(),
       _Section.systemPrompt => const _SystemPromptPanel(),
+      _Section.memories => const _MemoryPanel(),
       _Section.activeTasks => const _ActiveTasksPanel(),
       _Section.localServer => const _LocalServerPanel(),
       _Section.performance => const _PerformancePanel(),
@@ -1115,6 +1120,8 @@ class _SystemPromptPanel extends ConsumerStatefulWidget {
 
 class _SystemPromptPanelState extends ConsumerState<_SystemPromptPanel> {
   late final TextEditingController _promptCtrl;
+  // 功能二：全局提示词（global_prompt）——始终附加、不被会话/模板覆盖。
+  late final TextEditingController _globalPromptCtrl;
   bool _savingPrompt = false;
 
   @override
@@ -1123,6 +1130,9 @@ class _SystemPromptPanelState extends ConsumerState<_SystemPromptPanel> {
     _promptCtrl = TextEditingController(
       text: ref.read(settingsProvider)[AppConstants.settingSystemPrompt] ?? '',
     );
+    _globalPromptCtrl = TextEditingController(
+      text: ref.read(settingsProvider)[AppConstants.settingGlobalPrompt] ?? '',
+    );
     Future.microtask(
         () => ref.read(promptTemplatesProvider.notifier).load());
   }
@@ -1130,6 +1140,7 @@ class _SystemPromptPanelState extends ConsumerState<_SystemPromptPanel> {
   @override
   void dispose() {
     _promptCtrl.dispose();
+    _globalPromptCtrl.dispose();
     super.dispose();
   }
 
@@ -1139,6 +1150,8 @@ class _SystemPromptPanelState extends ConsumerState<_SystemPromptPanel> {
       await ref
           .read(settingsProvider.notifier)
           .set(AppConstants.settingSystemPrompt, _promptCtrl.text.trim());
+      await ref.read(settingsProvider.notifier).set(
+          AppConstants.settingGlobalPrompt, _globalPromptCtrl.text.trim());
       if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
@@ -1170,6 +1183,20 @@ class _SystemPromptPanelState extends ConsumerState<_SystemPromptPanel> {
             minLines: 5,
             decoration: const InputDecoration(
               hintText: '可选：设置全局系统提示词，如「你是一个乐于助人的助手」',
+              border: OutlineInputBorder(),
+              alignLabelWithHint: true,
+            ),
+          ),
+          const SizedBox(height: 10),
+          // 功能二：全局提示词 —— 始终附加在所有请求最前，不被会话/模板覆盖。
+          _GroupTitle('全局提示词（始终附加，不被会话覆盖）'),
+          TextField(
+            controller: _globalPromptCtrl,
+            maxLines: 6,
+            minLines: 3,
+            decoration: const InputDecoration(
+              hintText: '可选：始终附加在所有请求最前的固定提示词',
+              helperText: '始终附加在所有请求前，不受会话或模板覆盖',
               border: OutlineInputBorder(),
               alignLabelWithHint: true,
             ),
@@ -2895,6 +2922,239 @@ class _AboutPanelState extends ConsumerState<_AboutPanel> {
               padding: const EdgeInsets.symmetric(vertical: 12),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── 记忆库（功能三）────────────────────────────────────────────
+
+class _MemoryPanel extends ConsumerStatefulWidget {
+  const _MemoryPanel();
+
+  @override
+  ConsumerState<_MemoryPanel> createState() => _MemoryPanelState();
+}
+
+class _MemoryPanelState extends ConsumerState<_MemoryPanel> {
+  final _searchCtrl = TextEditingController();
+  String _keyword = '';
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() => ref.read(conversationsProvider.notifier).load());
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  List<MemoryItem> _resolveMemories(WidgetRef ref) {
+    if (_keyword.trim().isEmpty) {
+      return ref.watch(allMemoriesProvider).maybeWhen(
+            data: (list) => list,
+            orElse: () => const [],
+          );
+    }
+    return ref.watch(memorySearchProvider(_keyword.trim())).maybeWhen(
+          data: (list) => list,
+          orElse: () => const [],
+        );
+  }
+
+  Future<void> _addMemory(BuildContext context) async {
+    final conversations = ref.read(conversationsProvider);
+    final controller = TextEditingController();
+    int? conversationId = conversations.isNotEmpty ? conversations.first.id : null;
+    final content = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('添加记忆'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              minLines: 2,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                hintText: '输入要记住的内容',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (conversations.isNotEmpty)
+              DropdownButtonFormField<int?>(
+                initialValue: conversationId,
+                decoration: const InputDecoration(
+                  labelText: '所属会话',
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  for (final c in conversations)
+                    if (c.id != null)
+                      DropdownMenuItem(value: c.id, child: Text(c.title)),
+                ],
+                onChanged: (v) => conversationId = v,
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(controller.text.trim()),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (content == null || content.isEmpty || conversationId == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await ref.read(appDatabaseProvider).memoryRepository.insert(MemoryItem(
+          conversationId: conversationId!,
+          content: content,
+          kind: 'manual',
+          createdAt: now,
+          updatedAt: now,
+        ));
+    ref.invalidate(allMemoriesProvider);
+  }
+
+  Future<void> _deleteMemory(BuildContext context, MemoryItem item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除记忆'),
+        content: Text('确定删除这条记忆吗？\n\n「${item.content}」'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await ref.read(appDatabaseProvider).memoryRepository.delete(item.id!);
+    ref.invalidate(allMemoriesProvider);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final conversations = ref.watch(conversationsProvider);
+    final memories = _resolveMemories(ref);
+    final convById = {for (final c in conversations) if (c.id != null) c.id!: c};
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return _PanelScaffold(
+      title: '记忆库',
+      actions: [
+        FilledButton.tonalIcon(
+          onPressed: () => _addMemory(context),
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('添加记忆'),
+        ),
+      ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _searchCtrl,
+            decoration: InputDecoration(
+              prefixIcon: const Icon(Icons.search),
+              hintText: '搜索记忆内容',
+              suffixIcon: _keyword.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchCtrl.clear();
+                        setState(() => _keyword = '');
+                      },
+                    ),
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (v) => setState(() => _keyword = v),
+          ),
+          const SizedBox(height: 12),
+          if (memories.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 48),
+              child: Column(
+                children: [
+                  Icon(Icons.bookmark_outline,
+                      size: 48, color: colorScheme.onSurfaceVariant),
+                  const SizedBox(height: 12),
+                  Text('还没有记忆',
+                      style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 4),
+                  Text(
+                    '在消息长按菜单「保存到记忆库」添加，或点击「添加记忆」',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            )
+          else
+            for (final item in memories) ...[
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  item.pinned ? Icons.push_pin : Icons.bookmark_outline,
+                  color: item.pinned ? colorScheme.primary : null,
+                ),
+                title: Text(
+                  item.content,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  '${convById[item.conversationId]?.title ?? '会话 #${item.conversationId}'}'
+                  ' · ${item.kindLabel}',
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: item.pinned ? '取消置顶' : '置顶',
+                      icon: Icon(
+                        item.pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                      ),
+                      onPressed: () async {
+                        await ref.read(appDatabaseProvider).memoryRepository
+                            .update(item.copyWith(
+                          pinned: !item.pinned,
+                          updatedAt: DateTime.now().millisecondsSinceEpoch,
+                        ));
+                        ref.invalidate(allMemoriesProvider);
+                      },
+                    ),
+                    IconButton(
+                      tooltip: '删除',
+                      icon: Icon(Icons.delete_outline,
+                          color: colorScheme.error),
+                      onPressed: () => _deleteMemory(context, item),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+            ],
         ],
       ),
     );

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../application/providers/api_configs_provider.dart';
 import '../../application/providers/conversations_provider.dart';
 import '../../application/providers/database_provider.dart';
+import '../../application/providers/memories_provider.dart';
 import '../../application/providers/messages_provider.dart';
 import '../../application/providers/settings_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
@@ -12,6 +13,7 @@ import '../../core/theme.dart';
 import '../../core/utils.dart';
 import '../../domain/models/api_config.dart';
 import '../../domain/models/conversation.dart';
+import '../memories/memories_page.dart';
 import 'conversation_param_page.dart';
 
 /// 宽屏三栏右侧辅助面板（平板端布局）。
@@ -183,6 +185,18 @@ class ChatDetailPanel extends ConsumerWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
+              // 功能三：会话详情记忆区块。
+              const Divider(),
+              _sectionHeader(context, '记忆库'),
+              _buildMemoryBlock(context, ref, selected),
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.open_in_new, size: 18),
+                title: const Text('管理记忆库', style: TextStyle(fontSize: 13)),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const MemoriesPage()),
+                ),
+              ),
               if (selected.temperature != null ||
                   selected.maxTokens != null ||
                   selected.topP != null ||
@@ -262,6 +276,57 @@ class ChatDetailPanel extends ConsumerWidget {
     // 先提示再异步落库，避免 async gap 中误用 BuildContext。
     showToast(context, '已切换到模型：$model');
     await ref.read(conversationsProvider.notifier).update(updated);
+  }
+
+  /// 功能三：当前会话记忆区块（置顶优先 + 最近，最多展示 5 条）。
+  Widget _buildMemoryBlock(BuildContext context, WidgetRef ref, Conversation selected) {
+    final theme = Theme.of(context);
+    if (selected.id == null) return const SizedBox.shrink();
+    final memories = ref.watch(conversationMemoriesProvider(selected.id!)).maybeWhen(
+          data: (list) => list,
+          orElse: () => const [],
+        );
+    if (memories.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        child: Text(
+          '暂无记忆\n在消息长按菜单「保存到记忆库」添加',
+          style: TextStyle(fontSize: 12, color: theme.colorScheme.outline),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final item in memories.take(5))
+          ListTile(
+            dense: true,
+            leading: Icon(
+              item.pinned ? Icons.push_pin : Icons.bookmark_outline,
+              size: 18,
+              color: item.pinned ? theme.colorScheme.primary : null,
+            ),
+            title: Text(
+              item.content,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13),
+            ),
+            subtitle: Text(
+              item.kindLabel,
+              style: TextStyle(fontSize: 11, color: theme.colorScheme.outline),
+            ),
+          ),
+        if (memories.length > 5)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Text(
+              '还有 ${memories.length - 5} 条记忆，前往「管理记忆库」查看',
+              style: TextStyle(fontSize: 12, color: theme.colorScheme.primary),
+            ),
+          ),
+      ],
+    );
   }
 
   Widget _buildEmpty(BuildContext context) {

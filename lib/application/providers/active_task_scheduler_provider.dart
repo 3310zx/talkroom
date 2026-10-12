@@ -29,6 +29,7 @@ final activeTaskSchedulerProvider = Provider<ActiveTaskScheduler>((ref) {
     apiConfigRepository: db.apiConfigRepository,
     conversationRepository: db.conversationRepository,
     messageRepository: db.messageRepository,
+    memoryRepository: db.memoryRepository,
     settingsRepository: db.settingsRepository,
     notifications: notifications,
     llmClient: LlmClient(),

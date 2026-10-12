@@ -247,6 +247,7 @@ class _NoopActiveTaskScheduler extends ActiveTaskScheduler {
           apiConfigRepository: db.apiConfigRepository,
           conversationRepository: db.conversationRepository,
           messageRepository: db.messageRepository,
+          memoryRepository: db.memoryRepository,
           settingsRepository: db.settingsRepository,
           notifications: LocalNotificationsService(),
           llmClient: LlmClient(),

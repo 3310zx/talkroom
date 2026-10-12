@@ -8,10 +8,12 @@ import '../../domain/models/active_task_log.dart';
 import '../../domain/models/active_task_schedule.dart';
 import '../../domain/models/api_config.dart';
 import '../../domain/models/conversation.dart';
+import '../../domain/models/memory_item.dart';
 import '../../domain/models/message.dart';
 import '../../domain/repositories/active_task_repository.dart';
 import '../../domain/repositories/api_config_repository.dart';
 import '../../domain/repositories/conversation_repository.dart';
+import '../../domain/repositories/memory_repository.dart';
 import '../../domain/repositories/message_repository.dart';
 import '../../domain/repositories/settings_repository.dart';
 import 'llm_client.dart';
@@ -42,6 +44,7 @@ class ActiveTaskScheduler {
     required ApiConfigRepository apiConfigRepository,
     required ConversationRepository conversationRepository,
     required MessageRepository messageRepository,
+    required MemoryRepository memoryRepository,
     required SettingsRepository settingsRepository,
     required LocalNotificationsService notifications,
     required LlmClient llmClient,
@@ -51,6 +54,7 @@ class ActiveTaskScheduler {
         _apiConfigRepository = apiConfigRepository,
         _conversationRepository = conversationRepository,
         _messageRepository = messageRepository,
+        _memoryRepository = memoryRepository,
         _settingsRepository = settingsRepository,
         _notifications = notifications,
         _llmClient = llmClient,
@@ -61,6 +65,7 @@ class ActiveTaskScheduler {
   final ApiConfigRepository _apiConfigRepository;
   final ConversationRepository _conversationRepository;
   final MessageRepository _messageRepository;
+  final MemoryRepository _memoryRepository;
   final SettingsRepository _settingsRepository;
   final LocalNotificationsService _notifications;
   final LlmClient _llmClient;
@@ -192,6 +197,11 @@ class ActiveTaskScheduler {
       }
 
       final settings = await _settingsRepository.getAll();
+      // 功能四：记忆整理任务走独立分支（非流式提取关键记忆写入 memories）。
+      if (task.taskType == 'memory_summary') {
+        await _runMemorySummary(task, config, model, apiKey, settings, nowMs, quiet);
+        return;
+      }
       final temperature = _doubleSetting(
           settings, AppConstants.settingTemperature, AppConstants.defaultTemperature);
       final maxTokens = _intSetting(
@@ -199,8 +209,9 @@ class ActiveTaskScheduler {
       final topP = _doubleSetting(
           settings, AppConstants.settingTopP, AppConstants.defaultTopP);
       final systemPrompt = settings[AppConstants.settingSystemPrompt];
+      final globalPrompt = settings[AppConstants.settingGlobalPrompt];
 
-      final messages = _buildMessages(task, systemPrompt);
+      final messages = _buildMessages(task, systemPrompt, globalPrompt: globalPrompt);
       final result = await _llmClient.chat(
         baseUrl: config.baseUrl,
         apiKey: apiKey,
@@ -248,7 +259,7 @@ class ActiveTaskScheduler {
         lastRunAt: nowMs,
         lastStatus: 'ok',
         nextRunAt: nextRun,
-        enabled: task.taskType == 'once' ? false : task.enabled,
+        enabled: schedule.isOnce ? false : task.enabled,
       );
       await _activeTaskRepository.update(updated);
       _failCounts.remove(taskId);
@@ -268,6 +279,185 @@ class ActiveTaskScheduler {
     } finally {
       _running.remove(taskId);
     }
+  }
+
+  /// 功能四：记忆整理任务执行入口。
+  ///
+  /// 到点后对任务指定会话（未指定则取最近活跃会话，上限 3 个）提取
+  /// `status='done'` 且晚于上次游标的增量消息，非流式调用 LLM 生成关键
+  /// 记忆条目，去重（重叠 30% 跳过）后写入 memories（kind='auto'）。
+  /// 记忆不参与局域网同步与备份（决策 D7 / D8）。
+  Future<void> _runMemorySummary(
+    ActiveTask task,
+    ApiConfig config,
+    String model,
+    String apiKey,
+    Map<String, String> settings,
+    int nowMs,
+    bool quiet,
+  ) async {
+    final conversationIds = await _memorySummaryConversationIds(task);
+    if (conversationIds.isEmpty) {
+      throw const LlmException(LlmErrorType.server, '没有可整理记忆的会话，请在任务中指定会话');
+    }
+
+    var insertedTotal = 0;
+    for (final conversationId in conversationIds) {
+      insertedTotal += await _summarizeConversation(
+        conversationId,
+        config,
+        model,
+        apiKey,
+        settings,
+        nowMs,
+      );
+    }
+
+    // 更新任务：last_run_at / last_status / next_run_at（once 执行后停用）。
+    final schedule =
+        ActiveTaskSchedule.fromJson(task.scheduleData, taskType: task.taskType);
+    final nextRun = schedule.computeNextRunAt(DateTime.now());
+    await _activeTaskRepository.update(task.copyWith(
+      targetConversationId: conversationIds.first,
+      lastRunAt: nowMs,
+      lastStatus: 'ok',
+      nextRunAt: nextRun,
+      enabled: schedule.isOnce ? false : task.enabled,
+    ));
+    _failCounts.remove(task.id);
+
+    if (task.shouldNotifyDuring(quiet)) {
+      await _notifications.showActiveTaskResult(
+        taskName: task.taskName,
+        body: '记忆整理完成，本次共写入 $insertedTotal 条记忆',
+        conversationId: conversationIds.first,
+      );
+    }
+    await _writeLog(task.id!, nowMs, 'ok', '记忆整理完成，共写入 $insertedTotal 条记忆');
+    await _notifyChanged();
+  }
+
+  /// 记忆整理会话范围：任务指定则仅整理该会话；否则取最近活跃会话（上限 3）。
+  Future<List<int>> _memorySummaryConversationIds(ActiveTask task) async {
+    if (task.targetConversationId != null) {
+      return [task.targetConversationId!];
+    }
+    final conversations = await _conversationRepository.getAll();
+    final ids = <int>[];
+    for (final conv in conversations.take(3)) {
+      if (conv.id != null) ids.add(conv.id!);
+    }
+    return ids;
+  }
+
+  /// 整理单个会话：取增量消息 → LLM 提取 → 去重 → 写 memories → 推进游标。
+  Future<int> _summarizeConversation(
+    int conversationId,
+    ApiConfig config,
+    String model,
+    String apiKey,
+    Map<String, String> settings,
+    int nowMs,
+  ) async {
+    final cursorKey = 'memory_summary_cursor_$conversationId';
+    final cursor = int.tryParse(settings[cursorKey] ?? '0') ?? 0;
+
+    final all = await _messageRepository.listByConversation(conversationId);
+    final candidates = all
+        .where((m) => m.status == 'done' && m.createdAt > cursor)
+        .toList();
+    if (candidates.isEmpty) return 0;
+
+    // 截断：上限 50 条 / 8000 字（功能四常量）。
+    var chars = 0;
+    final picked = <ChatMessage>[];
+    for (final m in candidates.take(AppConstants.memorySummaryMaxMessages)) {
+      final content = m.content.trim();
+      if (content.isEmpty) continue;
+      if (chars + content.length > AppConstants.memorySummaryMaxChars) break;
+      chars += content.length;
+      picked.add(m);
+    }
+    if (picked.isEmpty) return 0;
+
+    final messages = _buildMemorySummaryMessages(picked, settings);
+    final result = await _llmClient.chat(
+      baseUrl: config.baseUrl,
+      apiKey: apiKey,
+      model: model,
+      messages: messages,
+      temperature: 0.3,
+      maxTokens: 1024,
+      topP: 1.0,
+    );
+
+    // 解析输出：每行一条，容忍行首 markdown 列表符号。
+    final existing = await _memoryRepository.listByConversation(conversationId);
+    var inserted = 0;
+    for (final rawLine in result.content.split('\n')) {
+      final text = rawLine
+          .trim()
+          .replaceFirst(RegExp(r'^[-*•]+\s*'), '')
+          .replaceFirst(RegExp(r'^\d+[.、)）]\s*'), '');
+      if (text.isEmpty || text.length > 300) continue;
+      // 去重：与已有记忆重叠 ≥30% 跳过（只跳过不删除，保守策略）。
+      if (existing.any((e) => _memoryOverlap(e.content, text))) continue;
+      await _memoryRepository.insert(MemoryItem(
+        conversationId: conversationId,
+        content: text,
+        kind: 'auto',
+        sourceMessageId: picked.last.id,
+        pinned: false,
+        createdAt: nowMs,
+        updatedAt: nowMs,
+      ));
+      inserted++;
+    }
+
+    // 推进游标到最后一条已处理消息，避免下次重复整理。
+    await _settingsRepository.setValue(cursorKey, picked.last.createdAt.toString());
+    return inserted;
+  }
+
+  /// 组装记忆整理请求：system（全局提示词 + 整理指令） + user（对话原文）。
+  List<Map<String, String>> _buildMemorySummaryMessages(
+      List<ChatMessage> messages, Map<String, String> settings) {
+    final globalPrompt = settings[AppConstants.settingGlobalPrompt];
+    final now = DateTime.now();
+    final timeText = '当前本地时间：${now.year}年${now.month.toString().padLeft(2, '0')}月'
+        '${now.day.toString().padLeft(2, '0')}日 '
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}'
+        '（星期${'一二三四五六日'[now.weekday - 1]}）。';
+    final system = [
+      if (globalPrompt != null && globalPrompt.trim().isNotEmpty)
+        globalPrompt.trim(),
+      '你是记忆整理助手。$timeText 请阅读以下对话，提取其中的关键记忆要点。'
+          '每条记忆用一句话概括，一行一条，不要编号，不要 Markdown 标记，'
+          '不要附加任何解释，只输出记忆条目本身。',
+    ].join('\n\n');
+    final body = messages
+        .map((m) => '${m.role == 'user' ? '用户' : '助手'}：${m.content.trim()}')
+        .join('\n');
+    return [
+      {'role': 'system', 'content': system},
+      {'role': 'user', 'content': body},
+    ];
+  }
+
+  /// 简单文本重叠判定：包含关系视为重叠；否则用字符集合 Jaccard 相似度
+  /// 超过阈值（默认 30%）视为重叠。
+  bool _memoryOverlap(String existing, String candidate) {
+    final a = existing.trim();
+    final b = candidate.trim();
+    if (a.isEmpty || b.isEmpty) return false;
+    if (a.contains(b) || b.contains(a)) return true;
+    final setA = a.split('').toSet();
+    final setB = b.split('').toSet();
+    if (setA.isEmpty || setB.isEmpty) return false;
+    final inter = setA.intersection(setB).length;
+    final union = setA.union(setB).length;
+    if (union == 0) return false;
+    return inter / union >= AppConstants.memorySummaryOverlapRatio;
   }
 
   /// 失败处理：顺延 10 分钟重试，最多 2 次；超过后按正常周期排下一次。
@@ -306,15 +496,21 @@ class ActiveTaskScheduler {
     await _notifyChanged();
   }
 
-  /// 组装 LLM 请求消息：system（全局 + 当前时间） + user（任务 prompt）。
+  /// 组装 LLM 请求消息：system（全局提示词 + 全局 + 当前时间） + user（任务 prompt）。
+  ///
+  /// 功能二：全局提示词（[globalPrompt]）始终作为 system 第一段注入，
+  /// 不被会话 / 模板覆盖。
   List<Map<String, String>> _buildMessages(
-      ActiveTask task, String? globalSystemPrompt) {
+      ActiveTask task, String? globalSystemPrompt,
+      {String? globalPrompt}) {
     final now = DateTime.now();
     final timeText = '当前本地时间：${now.year}年${now.month.toString().padLeft(2, '0')}月'
         '${now.day.toString().padLeft(2, '0')}日 '
         '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}'
         '（星期${'一二三四五六日'[now.weekday - 1]}）。';
     final system = [
+      if (globalPrompt != null && globalPrompt.trim().isNotEmpty)
+        globalPrompt.trim(),
       if (globalSystemPrompt != null && globalSystemPrompt.trim().isNotEmpty)
         globalSystemPrompt.trim(),
       '你是一个主动消息助手。$timeText 请按下面的任务指令直接生成一条消息内容，'

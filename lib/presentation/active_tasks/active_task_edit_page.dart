@@ -31,6 +31,7 @@ class _ActiveTaskEditPageState extends ConsumerState<ActiveTaskEditPage> {
   late final TextEditingController _modelCtrl;
 
   String _taskType = 'daily';
+  String _kind = 'message'; // 'message' 主动消息 | 'memory_summary' 记忆整理
   TimeOfDay _time = const TimeOfDay(hour: 8, minute: 0);
   Set<int> _weekdays = {DateTime.now().weekday};
   int _intervalHours = 24;
@@ -55,7 +56,8 @@ class _ActiveTaskEditPageState extends ConsumerState<ActiveTaskEditPage> {
         ActiveTaskSchedule.fromJson(existing.scheduleData, taskType: existing.taskType);
     _nameCtrl = TextEditingController(text: existing.taskName);
     _promptCtrl = TextEditingController(text: existing.prompt);
-    _taskType = existing.taskType;
+    _kind = existing.taskType == 'memory_summary' ? 'memory_summary' : 'message';
+    _taskType = schedule.freqType;
     _time = _parseTime(schedule.time) ?? const TimeOfDay(hour: 8, minute: 0);
     _weekdays = schedule.weekdays.toSet();
     _intervalHours = schedule.intervalHours ?? 24;
@@ -108,6 +110,26 @@ class _ActiveTaskEditPageState extends ConsumerState<ActiveTaskEditPage> {
               border: OutlineInputBorder(),
             ),
           ),
+          const SizedBox(height: 16),
+          Text('任务类型'),
+          const SizedBox(height: 4),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'message', label: Text('主动消息')),
+              ButtonSegment(value: 'memory_summary', label: Text('记忆整理')),
+            ],
+            selected: {_kind},
+            onSelectionChanged: (values) =>
+                setState(() => _kind = values.first),
+          ),
+          if (_kind == 'memory_summary') ...[
+            const SizedBox(height: 8),
+            Text(
+              '到点后自动提取该会话新增对话中的关键记忆，写入记忆库（kind=自动），'
+              '并按设定的频率重复整理。',
+              style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),
+            ),
+          ],
           const SizedBox(height: 16),
           Text('触发时刻'),
           const SizedBox(height: 4),
@@ -176,17 +198,23 @@ class _ActiveTaskEditPageState extends ConsumerState<ActiveTaskEditPage> {
             ),
           ],
           const SizedBox(height: 16),
-          TextField(
-            controller: _promptCtrl,
-            minLines: 4,
-            maxLines: 8,
-            decoration: const InputDecoration(
-              labelText: 'Prompt 内容',
-              hintText: '告诉 LLM 主动生成什么内容',
-              alignLabelWithHint: true,
-              border: OutlineInputBorder(),
+          if (_kind == 'memory_summary')
+            Text(
+              '整理指令由系统自动生成（提取关键记忆、去重后写入记忆库），无需填写 Prompt。',
+              style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),
+            )
+          else
+            TextField(
+              controller: _promptCtrl,
+              minLines: 4,
+              maxLines: 8,
+              decoration: const InputDecoration(
+                labelText: 'Prompt 内容',
+                hintText: '告诉 LLM 主动生成什么内容',
+                alignLabelWithHint: true,
+                border: OutlineInputBorder(),
+              ),
             ),
-          ),
           const SizedBox(height: 16),
           DropdownButtonFormField<int>(
             initialValue: _apiConfigId,
@@ -210,15 +238,16 @@ class _ActiveTaskEditPageState extends ConsumerState<ActiveTaskEditPage> {
           const SizedBox(height: 16),
           DropdownButtonFormField<int?>(
             initialValue: _conversationId,
-            decoration: const InputDecoration(
-              labelText: '目标会话',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: _kind == 'memory_summary' ? '目标会话（必选）' : '目标会话',
+              border: const OutlineInputBorder(),
             ),
             items: [
-              const DropdownMenuItem<int?>(
-                value: null,
-                child: Text('自动新建会话（推荐）'),
-              ),
+              if (_kind != 'memory_summary')
+                const DropdownMenuItem<int?>(
+                  value: null,
+                  child: Text('自动新建会话（推荐）'),
+                ),
               for (final conv in conversations)
                 DropdownMenuItem<int?>(
                   value: conv.id,
@@ -235,19 +264,21 @@ class _ActiveTaskEditPageState extends ConsumerState<ActiveTaskEditPage> {
               border: OutlineInputBorder(),
             ),
           ),
-          const SizedBox(height: 16),
-          Text('投递方式'),
-          const SizedBox(height: 4),
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'chat', label: Text('仅聊天')),
-              ButtonSegment(value: 'both', label: Text('聊天 + 通知')),
-              ButtonSegment(value: 'notification', label: Text('仅通知')),
-            ],
-            selected: {_delivery},
-            onSelectionChanged: (values) =>
-                setState(() => _delivery = values.first),
-          ),
+          if (_kind != 'memory_summary') ...[
+            const SizedBox(height: 16),
+            Text('投递方式'),
+            const SizedBox(height: 4),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'chat', label: Text('仅聊天')),
+                ButtonSegment(value: 'both', label: Text('聊天 + 通知')),
+                ButtonSegment(value: 'notification', label: Text('仅通知')),
+              ],
+              selected: {_delivery},
+              onSelectionChanged: (values) =>
+                  setState(() => _delivery = values.first),
+            ),
+          ],
           const SizedBox(height: 16),
           Text('静默时段（可选）'),
           const SizedBox(height: 4),
@@ -339,7 +370,11 @@ class _ActiveTaskEditPageState extends ConsumerState<ActiveTaskEditPage> {
       _snack('请填写任务名称');
       return;
     }
-    if (prompt.isEmpty) {
+    if (_kind == 'memory_summary' && _conversationId == null) {
+      _snack('记忆整理任务请选择目标会话');
+      return;
+    }
+    if (_kind != 'memory_summary' && prompt.isEmpty) {
       _snack('请填写 Prompt 内容');
       return;
     }
@@ -360,13 +395,16 @@ class _ActiveTaskEditPageState extends ConsumerState<ActiveTaskEditPage> {
       return;
     }
 
+    final isMemory = _kind == 'memory_summary';
     final schedule = ActiveTaskSchedule(
-      taskType: _taskType,
+      taskType: isMemory ? 'memory_summary' : _taskType,
       time: _taskType == 'interval'
           ? null
           : '${_time.hour.toString().padLeft(2, '0')}:${_time.minute.toString().padLeft(2, '0')}',
       weekdays: _taskType == 'weekly' ? (_weekdays.toList()..sort()) : const [],
       intervalHours: _taskType == 'interval' ? _intervalHours : null,
+      kind: isMemory ? 'memory_summary' : null,
+      scheduleType: isMemory ? _taskType : null,
     );
     final now = DateTime.now();
     final nextRunAt = schedule.computeNextRunAt(now);
@@ -376,13 +414,13 @@ class _ActiveTaskEditPageState extends ConsumerState<ActiveTaskEditPage> {
     final task = ActiveTask(
       id: existing?.id,
       taskName: name,
-      taskType: _taskType,
+      taskType: isMemory ? 'memory_summary' : _taskType,
       scheduleData: schedule.toJson(),
-      prompt: prompt,
+      prompt: isMemory ? '' : prompt,
       apiConfigId: _apiConfigId,
       modelId: _modelCtrl.text.trim(),
       targetConversationId: _conversationId,
-      delivery: _delivery,
+      delivery: isMemory ? 'notification' : _delivery,
       quietStart: _quietStart == null ? null : _formatQuiet(_quietStart),
       quietEnd: _quietEnd == null ? null : _formatQuiet(_quietEnd),
       enabled: existing?.enabled ?? true,

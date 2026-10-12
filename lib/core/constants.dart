@@ -22,6 +22,8 @@ abstract final class AppConstants {
   static const String settingFrequencyPenalty = 'frequency_penalty';
   static const String settingPresencePenalty = 'presence_penalty';
   static const String settingSystemPrompt = 'system_prompt';
+  /// 全局提示词（功能二）：始终附加在所有请求的 system 第一段，不受会话/模板覆盖。
+  static const String settingGlobalPrompt = 'global_prompt';
   static const String settingQuietStart = 'quiet_start';
   static const String settingQuietEnd = 'quiet_end';
 
@@ -106,4 +108,17 @@ abstract final class AppConstants {
   static const double defaultTopP = 1.0;
   static const double defaultFrequencyPenalty = 0.0;
   static const double defaultPresencePenalty = 0.0;
+
+  // ---- 外置记忆库（功能三 / 功能四） ----
+
+  /// 请求组装时注入当前会话记忆的上限条数（决策 D6：置顶优先 + 最近）。
+  static const int memoryInjectMaxCount = 5;
+  /// 请求组装时注入记忆的文本总字数上限（决策 D6）。
+  static const int memoryInjectMaxChars = 2000;
+  /// 自动整理单轮取消息上限（功能四）。
+  static const int memorySummaryMaxMessages = 50;
+  /// 自动整理单轮取消息文本总字数上限（功能四）。
+  static const int memorySummaryMaxChars = 8000;
+  /// 自动整理去重重叠阈值：与已有记忆文本重叠超过该比例则跳过（功能四）。
+  static const double memorySummaryOverlapRatio = 0.3;
 }

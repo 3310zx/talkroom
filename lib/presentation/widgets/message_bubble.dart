@@ -40,6 +40,8 @@ class MessageBubble extends StatelessWidget {
     this.onEdit,
     this.onDelete,
     this.onQuote,
+    this.onVariantReply,
+    this.onSaveToMemory,
     this.attachments = const [],
   });
 
@@ -73,6 +75,13 @@ class MessageBubble extends StatelessWidget {
 
   /// 以引用块样式带入输入框
   final VoidCallback? onQuote;
+
+  /// 消息变体动作（功能一）：以指令文本触发重新生成变体
+  /// （「更详尽地回答 / 更简洁地回答 / 更个性化的回答」）。
+  final void Function(String instruction)? onVariantReply;
+
+  /// 保存到记忆库（功能三）：将该助手消息内容收藏为记忆条目。
+  final VoidCallback? onSaveToMemory;
 
   @override
   Widget build(BuildContext context) {
@@ -222,10 +231,11 @@ class MessageBubble extends StatelessWidget {
 
   /// 长按消息气泡弹出操作菜单（R3）：
   /// 复制 / 重新生成 / 编辑（仅用户）/ 删除 / 引用 / 分享。
-  /// 复制与分享在气泡内直接完成；重新生成/编辑/删除/引用由上层回调驱动
-  /// （回调未传入时对应菜单项隐藏）。
+  /// 复制与分享在气泡内直接完成；重新生成/重试/变体/保存记忆/编辑/删除/引用
+  /// 由上层回调驱动（回调未传入时对应菜单项隐藏）。
   void _showActionMenu(BuildContext context) {
     final theme = Theme.of(context);
+    final isFailed = status == 'error' || status == 'stopped';
     final items = <Widget>[
       ListTile(
         leading: const Icon(Icons.copy),
@@ -235,13 +245,68 @@ class MessageBubble extends StatelessWidget {
           _copyContent(context);
         },
       ),
-      if (onRegenerate != null)
+      // 功能一：失败（error / stopped）助手消息显示「重试」（沿用失败重试语义）；
+      // 已完成的助手消息显示「重新生成」。
+      if (isFailed && onRetry != null)
+        ListTile(
+          leading: const Icon(Icons.refresh),
+          title: const Text('重试'),
+          onTap: () {
+            Navigator.of(context).pop();
+            onRetry!();
+          },
+        )
+      else if (onRegenerate != null)
         ListTile(
           leading: const Icon(Icons.refresh),
           title: const Text('重新生成'),
           onTap: () {
             Navigator.of(context).pop();
             onRegenerate!();
+          },
+        ),
+      // 功能一：消息变体动作分组（仅已完成助手消息注入 onVariantReply）。
+      if (onVariantReply != null) ...[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+          child: Text(
+            '变体回复',
+            style: theme.textTheme.labelMedium
+                ?.copyWith(color: theme.colorScheme.outline),
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.notes),
+          title: const Text('更详尽地回答'),
+          onTap: () {
+            Navigator.of(context).pop();
+            onVariantReply!('请基于上一问给出更详尽、更完整的回答');
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.compress),
+          title: const Text('更简洁地回答'),
+          onTap: () {
+            Navigator.of(context).pop();
+            onVariantReply!('请用更简洁的方式重新回答，避免冗长');
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.face_retouching_natural),
+          title: const Text('更个性化的回答'),
+          onTap: () {
+            Navigator.of(context).pop();
+            onVariantReply!('请用更有个性、更有个人风格与温度的方式重新回答');
+          },
+        ),
+      ],
+      if (onSaveToMemory != null)
+        ListTile(
+          leading: const Icon(Icons.bookmark_add_outlined),
+          title: const Text('保存到记忆库'),
+          onTap: () {
+            Navigator.of(context).pop();
+            onSaveToMemory!();
           },
         ),
       if (onEdit != null)

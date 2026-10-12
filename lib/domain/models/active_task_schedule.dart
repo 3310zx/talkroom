@@ -15,9 +15,11 @@ class ActiveTaskSchedule {
     this.time,
     this.weekdays = const [],
     this.intervalHours,
+    this.kind,
+    this.scheduleType,
   });
 
-  /// 'once' | 'daily' | 'weekly' | 'interval'
+  /// 'once' | 'daily' | 'weekly' | 'interval'（兼容记忆整理任务作为频率语义）
   final String taskType;
 
   /// HH:mm（once/daily/weekly 使用）
@@ -29,14 +31,29 @@ class ActiveTaskSchedule {
   /// 间隔小时数（interval 使用）
   final int? intervalHours;
 
+  /// 业务类型（功能四：'memory_summary' 记忆整理；空 = 普通主动消息）。
+  final String? kind;
+
+  /// 记忆整理任务的实际频率类型（'once'/'daily'/'weekly'/'interval'）。
+  final String? scheduleType;
+
+  /// 实际用于频率计算 / 描述的类型：memory_summary 任务取 scheduleType。
+  String get freqType =>
+      taskType == 'memory_summary' ? (scheduleType ?? 'interval') : taskType;
+
+  bool get isOnce => freqType == 'once';
+
   int? get _hour => time == null ? null : int.tryParse(time!.split(':').first);
   int? get _minute => time == null ? null : int.tryParse(time!.split(':').last);
 
-  bool get isInterval => taskType == 'interval';
+  bool get isInterval => freqType == 'interval';
 
   /// 序列化为数据库存储的 JSON。
   String toJson() {
     final map = <String, dynamic>{
+      if (kind != null && kind!.isNotEmpty) 'kind': kind,
+      if (scheduleType != null && scheduleType!.isNotEmpty)
+        'schedule_type': scheduleType,
       if (time != null) 'time': time,
       if (weekdays.isNotEmpty) 'weekdays': weekdays,
       if (intervalHours != null) 'interval_hours': intervalHours,
@@ -62,12 +79,14 @@ class ActiveTaskSchedule {
           for (final w in (map['weekdays'] as List).whereType<num>()) w.toInt(),
       ],
       intervalHours: (map['interval_hours'] as num?)?.toInt(),
+      kind: map['kind'] as String?,
+      scheduleType: map['schedule_type'] as String?,
     );
   }
 
   /// 中文描述，供任务列表页展示（如「每天 08:00」「每周 一、三 09:00」）。
   String describe() {
-    switch (taskType) {
+    switch (freqType) {
       case 'once':
         return '一次性 ${time ?? ''}'.trim();
       case 'daily':
@@ -93,7 +112,7 @@ class ActiveTaskSchedule {
 
   /// 周期毫秒数（用于速率保护：执行间隔不小于周期的 50%）。
   int cycleMillis() {
-    switch (taskType) {
+    switch (freqType) {
       case 'interval':
         return (intervalHours ?? 24) * 3600 * 1000;
       case 'daily':
@@ -108,7 +127,7 @@ class ActiveTaskSchedule {
   /// 计算 [from] 之后的下一次触发时间（本地时间戳毫秒）。
   /// 一次性任务返回 null（执行一次后不再调度）。
   int? computeNextRunAt(DateTime from) {
-    switch (taskType) {
+    switch (freqType) {
       case 'once':
         return _computeNextTime(from);
       case 'daily':

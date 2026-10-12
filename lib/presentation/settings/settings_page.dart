@@ -15,6 +15,7 @@ import '../../core/utils.dart';
 import '../../services/apk_downloader.dart';
 import '../../services/update_service.dart';
 import '../active_tasks/active_tasks_page.dart';
+import '../memories/memories_page.dart';
 import '../about/about_page.dart';
 import '../api_config/api_config_list_page.dart';
 import '../cache_hits/cache_hits_page.dart';
@@ -226,6 +227,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               MaterialPageRoute(
                 builder: (_) => const PromptTemplatesPage(),
               ),
+            ),
+          ),
+          // 功能三：记忆库管理入口。
+          ListTile(
+            leading: const Icon(Icons.bookmark_outline),
+            title: const Text('记忆库'),
+            subtitle: const Text('浏览 / 搜索 / 添加 / 删除 / 置顶对话记忆'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const MemoriesPage()),
             ),
           ),
 
@@ -789,6 +800,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             '${AppConstants.defaultPresencePenalty}');
     final systemPromptCtrl = TextEditingController(
         text: settings[AppConstants.settingSystemPrompt] ?? '');
+    // 功能二：全局提示词（global_prompt）——始终附加、不被会话/模板覆盖。
+    final globalPromptCtrl = TextEditingController(
+        text: settings[AppConstants.settingGlobalPrompt] ?? '');
     String selectedPreset = '';
 
     final saved = await showDialog<bool>(
@@ -898,6 +912,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   labelText: 'system_prompt（可选）',
                 ),
               ),
+              const SizedBox(height: 8),
+              // 功能二：全局提示词 —— 始终附加在所有请求最前，不被会话覆盖。
+              TextField(
+                controller: globalPromptCtrl,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: '全局提示词（可选）',
+                  helperText: '始终附加在所有请求前，不受会话/模板覆盖',
+                ),
+              ),
             ],
           ),
         ),
@@ -961,6 +985,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     await notifier.set(AppConstants.settingPresencePenalty, presenceCtrl.text.trim());
     await notifier.set(
         AppConstants.settingSystemPrompt, systemPromptCtrl.text.trim());
+    // 功能二：全局提示词保存。
+    await notifier.set(
+        AppConstants.settingGlobalPrompt, globalPromptCtrl.text.trim());
   }
 }
 

@@ -6,6 +6,7 @@ import '../../domain/repositories/api_config_repository.dart';
 import '../../domain/repositories/conversation_repository.dart';
 import '../../domain/repositories/device_repository.dart';
 import '../../domain/repositories/message_repository.dart';
+import '../../domain/repositories/memory_repository.dart';
 import '../../domain/repositories/prompt_template_repository.dart';
 import '../../domain/repositories/settings_repository.dart';
 import '../../domain/repositories/sync_cursor_repository.dart';
@@ -14,6 +15,7 @@ import '../repositories/api_config_repository_impl.dart';
 import '../repositories/conversation_repository_impl.dart';
 import '../repositories/device_repository_impl.dart';
 import '../repositories/message_repository_impl.dart';
+import '../repositories/memory_repository_impl.dart';
 import '../repositories/prompt_template_repository_impl.dart';
 import '../repositories/settings_repository_impl.dart';
 import '../repositories/sync_cursor_repository_impl.dart';
@@ -47,7 +49,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 11,
+      version: 12,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -195,8 +197,32 @@ class AppDatabase {
       )
     ''');
 
+    // 外置记忆库（PRD 记忆库；version 12 起建表，旧库通过 onUpgrade 迁移）：
+    await _createMemoriesTable(db);
+
     // 局域网同步（PRD 第 7 章 7.4；version 2 起建表，旧库通过 onUpgrade 迁移）：
     await _createSyncTables(db);
+  }
+
+  /// 记忆库表（version 12）。记忆条目独立于消息：源消息删除后记忆仍保留；
+  /// 记忆不纳入局域网同步与备份（决策 D7 / D8，仅本机数据）。
+  Future<void> _createMemoriesTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS memories (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id   INTEGER NOT NULL,
+        content           TEXT NOT NULL,
+        kind              TEXT NOT NULL DEFAULT 'manual',
+        source_message_id INTEGER,
+        pinned            INTEGER NOT NULL DEFAULT 0,
+        created_at        INTEGER NOT NULL,
+        updated_at        INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_memories_conv
+      ON memories(conversation_id, updated_at DESC)
+    ''');
   }
 
   Future<void> _createSyncTables(Database db) async {
@@ -276,6 +302,16 @@ class AppDatabase {
     if (oldVersion < 11) {
       await _migrateV11(db);
     }
+    // version 11 -> 12：外置记忆库 memories 表（手动收藏 + 自动整理）
+    if (oldVersion < 12) {
+      await _migrateV12(db);
+    }
+  }
+
+  /// version 11 -> 12 迁移：新建 `memories` 记忆库表。
+  /// 对齐 _onCreate 中 version 12 的完整 schema（幂等建表 + 索引）。
+  Future<void> _migrateV12(Database db) async {
+    await _createMemoriesTable(db);
   }
 
   /// version 10 -> 11 迁移：`messages` 幂等补齐 `duration_ms` 列。
@@ -424,6 +460,7 @@ class AppDatabase {
   late final ApiConfigRepository apiConfigRepository = ApiConfigRepositoryImpl(this);
   late final ConversationRepository conversationRepository = ConversationRepositoryImpl(this);
   late final MessageRepository messageRepository = MessageRepositoryImpl(this);
+  late final MemoryRepository memoryRepository = MemoryRepositoryImpl(this);
   late final PromptTemplateRepository promptTemplateRepository = PromptTemplateRepositoryImpl(this);
   late final SettingsRepository settingsRepository = SettingsRepositoryImpl(this);
   late final DeviceRepository deviceRepository = DeviceRepositoryImpl(this);

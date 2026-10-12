@@ -13,6 +13,7 @@ import 'package:speech_to_text/speech_to_text.dart';
 import '../../application/providers/api_configs_provider.dart';
 import '../../application/providers/conversations_provider.dart';
 import '../../application/providers/database_provider.dart';
+import '../../application/providers/memories_provider.dart';
 import '../../application/providers/messages_provider.dart';
 import '../../application/providers/settings_provider.dart';
 import '../../application/providers/ui_state_provider.dart';
@@ -23,6 +24,7 @@ import '../../core/utils.dart';
 import '../../data/secure_storage/api_key_store.dart';
 import '../../domain/models/api_config.dart';
 import '../../domain/models/conversation.dart';
+import '../../domain/models/memory_item.dart';
 import '../../domain/models/message.dart';
 import '../../services/llm_client.dart';
 import '../../services/conversation_exporter.dart';
@@ -639,7 +641,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   /// 发送消息：自动建会话 → 用户消息落库 → 流式请求 → 三态落库。
-  Future<void> _send([String? preset]) async {
+  ///
+  /// [userInstruction]：消息变体附加指令（功能一）。以独立 user 消息注入
+  /// 请求，不污染落库的用户消息原文（决策 D4：变体指令不落库）。
+  /// [keepOriginal]：变体保留模式（决策 D4 修正）——原用户消息与助手回复
+  /// 均已存在，跳过重复落库用户消息、不再追加重复 user 段，仅注入指令
+  /// 重发，新回复作为新消息追加，不污染原回复。
+  Future<void> _send(
+      [String? preset, String? userInstruction, bool keepOriginal = false]) async {
     final text = (preset ?? _inputController.text).trim();
     // R9：附件与文本可同时发送；两者皆空才拦截。
     final hasAttachments = _pendingAttachments.isNotEmpty;
@@ -688,15 +697,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       conversationId = conv.id!;
 
       // 2) 用户消息即时落库并显示。
-      await ref.read(messagesProvider.notifier).add(ChatMessage(
-            conversationId: conversationId,
-            role: 'user',
-            content: text,
-            status: 'done',
-            createdAt: now,
-            attachments: attachments,
-          ));
-      await _updateConversationMeta(conversationId, _summarize(text), now);
+      //    变体保留模式（keepOriginal）跳过：原用户消息与回复已在列表中，
+      //    重复落库会制造冗余用户消息，故仅追加新的助手回复。
+      if (!keepOriginal) {
+        await ref.read(messagesProvider.notifier).add(ChatMessage(
+              conversationId: conversationId,
+              role: 'user',
+              content: text,
+              status: 'done',
+              createdAt: now,
+              attachments: attachments,
+            ));
+        await _updateConversationMeta(conversationId, _summarize(text), now);
+      }
       _scrollToBottom();
 
       // 3) 助手占位消息（streaming），流式增量更新其内容。
@@ -757,9 +770,39 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // 6) 组装上下文：system prompt + 最近 N 条 done 消息 + 本次（PRD 4.4.1）。
       //    R9：含附件的用户消息按 OpenAI 多模态格式附加（image_url / file_url
       //    文本块），纯文本消息保持 string content 兼容旧模型。
+      //    功能二：全局提示词（global_prompt）始终作为 system 第一段注入，
+      //    不受会话 / 模板覆盖；功能三：当前会话记忆注入 system 段。
+      final globalPrompt = settings[AppConstants.settingGlobalPrompt] ?? '';
       final llmMessages = <Map<String, dynamic>>[];
+      if (globalPrompt.trim().isNotEmpty) {
+        llmMessages.add({'role': 'system', 'content': globalPrompt});
+      }
       if (systemPrompt != null && systemPrompt.trim().isNotEmpty) {
         llmMessages.add({'role': 'system', 'content': systemPrompt});
+      }
+      // 记忆注入（功能三）：置顶优先 + 最近，上限 5 条 / 2000 字（决策 D6）。
+      final memories = await ref
+          .read(appDatabaseProvider)
+          .memoryRepository
+          .listByConversation(conversationId);
+      if (memories.isNotEmpty) {
+        final memoryLines = <String>[];
+        var memoryChars = 0;
+        for (final item in memories.take(AppConstants.memoryInjectMaxCount)) {
+          final line = item.content.trim();
+          if (line.isEmpty) continue;
+          if (memoryChars + line.length > AppConstants.memoryInjectMaxChars) {
+            break;
+          }
+          memoryChars += line.length;
+          memoryLines.add('- $line');
+        }
+        if (memoryLines.isNotEmpty) {
+          llmMessages.add({
+            'role': 'system',
+            'content': '以下是本会话的关键记忆，请参考：\n${memoryLines.join('\n')}',
+          });
+        }
       }
       final history = ref
           .read(messagesProvider)
@@ -776,10 +819,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               : m.content,
         });
       }
-      llmMessages.add({
-        'role': 'user',
-        'content': _buildMultimodalContent(text, attachments),
-      });
+      // keepOriginal（变体保留模式）：原用户消息已包含在 history 中，
+      // 不再重复追加 user 段；仅注入变体指令，新回复作为新消息追加。
+      if (!keepOriginal) {
+        llmMessages.add({
+          'role': 'user',
+          'content': _buildMultimodalContent(text, attachments),
+        });
+      }
+      // 功能一：消息变体附加指令 —— 独立 user 消息注入（不落库），
+      // 不篡改原文，对任意 OpenAI 兼容 API 均安全。
+      final instruction = userInstruction?.trim();
+      if (instruction != null && instruction.isNotEmpty) {
+        llmMessages.add({'role': 'user', 'content': instruction});
+      }
 
       // 7) SSE 流式请求：增量更新气泡。
       final result = await LlmClient().chatStream(
@@ -1397,6 +1450,89 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     await _send(userMessage.content);
   }
 
+  /// 功能一：消息变体 —— 变体指令以独立 user 消息注入请求（保留原文
+  /// 落库不变，指令不落库，决策 D4）。
+  /// 原回复处理（决策 D4 修正）：默认保留原助手回复文本，删除与否交由
+  /// 用户选择——「保留原回复重发」不删除原消息，直接在现有上下文上注入
+  /// 指令重发，新回复作为新消息追加（不污染原回复）；「删除原回复后重发」
+  /// 走现有 deleteFrom（删除原 user 消息及其之后）后再重发。
+  Future<void> _sendWithVariant(
+      ChatMessage assistantMessage, String instruction) async {
+    if (_isSending) {
+      _showSnack('正在生成回复，请稍候…');
+      return;
+    }
+    final msgs = ref.read(messagesProvider);
+    final index = msgs.indexWhere((m) => m.id == assistantMessage.id);
+    if (index < 0) return;
+    ChatMessage? userMessage;
+    for (var i = index - 1; i >= 0; i--) {
+      if (msgs[i].role == 'user') {
+        userMessage = msgs[i];
+        break;
+      }
+    }
+    if (userMessage == null) return;
+
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('变体重发'),
+        content: const Text('如何处理原回复？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop('keep'),
+            child: const Text('保留原回复重发'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop('delete'),
+            child: const Text('删除原回复后重发'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
+    if (action == null || !mounted) return;
+    if (action == 'delete') {
+      // 删除模式：删除原用户消息及其之后（含原回复），再用原文重发。
+      await ref.read(messagesProvider.notifier).deleteFrom(userMessage.id!);
+      await _send(userMessage.content, instruction);
+    } else {
+      // 保留模式：不删除原消息，直接带指令重发，新回复作为新消息追加。
+      await _send(userMessage.content, instruction, true);
+    }
+  }
+
+  /// 功能三：将该消息内容保存为当前会话的记忆条目（kind='manual'）。
+  /// 记忆独立于消息：源消息删除后记忆仍保留；不参与同步与备份。
+  Future<void> _saveMessageToMemory(ChatMessage message) async {
+    final conv = ref.read(selectedConversationProvider);
+    final content = message.content.trim();
+    if (content.isEmpty) {
+      _showSnack('该消息没有可保存的内容');
+      return;
+    }
+    if (conv == null || conv.id == null) {
+      _showSnack('请先选择或创建会话');
+      return;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await ref.read(appDatabaseProvider).memoryRepository.insert(MemoryItem(
+          conversationId: conv.id!,
+          content: content,
+          kind: 'manual',
+          sourceMessageId: message.id,
+          createdAt: now,
+          updatedAt: now,
+        ));
+    // 刷新会话详情面板中的记忆列表。
+    ref.read(memoriesProvider.notifier).loadForConversation(conv.id!);
+    _showSnack('已保存到记忆库');
+  }
+
   /// R3「编辑」（仅用户消息）：弹窗编辑原文，保存后删除该消息及之后
   /// 的所有消息，用新内容重新发送生成新回复。
   Future<void> _editMessage(ChatMessage message) async {
@@ -1927,6 +2063,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // 删除 / 引用；对应菜单项在回调为 null 时自动隐藏。
       onRegenerate: message.role == 'assistant' && message.status == 'done'
           ? () => _regenerate(message)
+          : null,
+      // 功能一：消息变体（仅已完成助手消息）；功能三：保存到记忆库（助手消息）。
+      onVariantReply:
+          message.role == 'assistant' && message.status == 'done'
+              ? (instruction) => _sendWithVariant(message, instruction)
+              : null,
+      onSaveToMemory: message.role == 'assistant' && message.status == 'done'
+          ? () => _saveMessageToMemory(message)
           : null,
       onEdit: message.role == 'user' ? () => _editMessage(message) : null,
       onDelete: () => _deleteMessage(message),
