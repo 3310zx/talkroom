@@ -21,6 +21,7 @@ import '../../domain/models/api_config.dart';
 import '../../domain/models/memory_item.dart';
 import '../../domain/models/message.dart';
 import '../../domain/models/prompt_template.dart';
+import '../../services/context_compressor.dart';
 import '../../services/update_service.dart';
 import '../about/about_page.dart';
 import '../active_tasks/active_task_edit_page.dart';
@@ -49,6 +50,7 @@ enum _Section {
   api('API 服务', Icons.dns_outlined),
   defaultParams('默认参数', Icons.tune),
   systemPrompt('System Prompt', Icons.person_outline),
+  contextCompression('上下文压缩', Icons.compress),
   memories('记忆库', Icons.bookmark_outline),
   activeTasks('主动消息', Icons.notifications_active_outlined),
   localServer('本地服务', Icons.lan_outlined),
@@ -178,6 +180,7 @@ class _MacosSettingsPageState extends ConsumerState<MacosSettingsPage> {
       _Section.api => const _ApiPanel(),
       _Section.defaultParams => const _DefaultParamsPanel(),
       _Section.systemPrompt => const _SystemPromptPanel(),
+      _Section.contextCompression => const _ContextCompressionPanel(),
       _Section.memories => const _MemoryPanel(),
       _Section.activeTasks => const _ActiveTasksPanel(),
       _Section.localServer => const _LocalServerPanel(),
@@ -1101,6 +1104,194 @@ class _DefaultParamsPanelState extends ConsumerState<_DefaultParamsPanel> {
       keyboardType: keyboardType,
       decoration: InputDecoration(
         labelText: label,
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+    );
+  }
+}
+
+// ── 上下文压缩 ───────────────────────────────────────────────────
+
+/// v1.2.24 上下文压缩设置面板（参考 deepx-code 的分层 + 摘要合并）。
+///
+/// 四项数值参数 + 自动压缩开关，写入 settings 表后由
+/// [ContextCompressionConfig.fromSettings] 读取生效。
+class _ContextCompressionPanel extends ConsumerStatefulWidget {
+  const _ContextCompressionPanel();
+
+  @override
+  ConsumerState<_ContextCompressionPanel> createState() =>
+      _ContextCompressionPanelState();
+}
+
+class _ContextCompressionPanelState
+    extends ConsumerState<_ContextCompressionPanel> {
+  late final TextEditingController _windowCtrl;
+  late final TextEditingController _percentCtrl;
+  late final TextEditingController _tailCtrl;
+  late final TextEditingController _charsCtrl;
+  bool _enabled = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final config =
+        ContextCompressionConfig.fromSettings(ref.read(settingsProvider));
+    _enabled = config.enabled;
+    _windowCtrl = TextEditingController(text: '${config.contextWindow}');
+    _percentCtrl = TextEditingController(text: '${config.triggerPercent}');
+    _tailCtrl = TextEditingController(text: '${config.tailKeepTokens}');
+    _charsCtrl = TextEditingController(text: '${config.summaryMaxChars}');
+  }
+
+  @override
+  void dispose() {
+    _windowCtrl.dispose();
+    _percentCtrl.dispose();
+    _tailCtrl.dispose();
+    _charsCtrl.dispose();
+    super.dispose();
+  }
+
+  void _snack(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _save() async {
+    final window = int.tryParse(_windowCtrl.text.trim());
+    final percent = int.tryParse(_percentCtrl.text.trim());
+    final tail = int.tryParse(_tailCtrl.text.trim());
+    final chars = int.tryParse(_charsCtrl.text.trim());
+    if (window == null || window < 1000 || window > 4000000) {
+      _snack('上下文窗口需为 1000 ~ 4000000 的整数');
+      return;
+    }
+    if (percent == null || percent < 1 || percent > 100) {
+      _snack('触发阈值需为 1 ~ 100 的整数');
+      return;
+    }
+    if (tail == null || tail < 1 || tail >= window) {
+      _snack('尾部保留需为不小于 1 且小于上下文窗口的整数');
+      return;
+    }
+    if (chars == null || chars < 100 || chars > 5000) {
+      _snack('摘要最大字数需为 100 ~ 5000 的整数');
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final notifier = ref.read(settingsProvider.notifier);
+      await notifier.set(
+          AppConstants.settingContextCompressionEnabled, _enabled ? '1' : '0');
+      await notifier.set(AppConstants.settingContextWindowTokens, '$window');
+      await notifier.set(AppConstants.settingContextTriggerPercent, '$percent');
+      await notifier.set(AppConstants.settingContextTailKeepTokens, '$tail');
+      await notifier.set(
+          AppConstants.settingContextSummaryMaxChars, '$chars');
+      if (!mounted) return;
+      _snack('上下文压缩设置已保存');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final window = int.tryParse(_windowCtrl.text.trim()) ??
+        AppConstants.defaultContextWindowTokens;
+    final percent = int.tryParse(_percentCtrl.text.trim()) ??
+        AppConstants.defaultContextTriggerPercent;
+    final triggerTokens = (window * percent / 100).round();
+
+    return _PanelScaffold(
+      title: '上下文压缩',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _GroupTitle('自动压缩'),
+          _SettingRow(
+            icon: Icons.compress,
+            title: '自动压缩历史上下文',
+            subtitle: _enabled
+                ? '估算用量达到 $percent% 上下文窗口（约 $triggerTokens token）时自动触发'
+                : '已关闭：发送前不做自动压缩，仅可手动压缩',
+            trailing: Switch(
+              value: _enabled,
+              onChanged: (value) => setState(() => _enabled = value),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: Text(
+              '压缩策略（参考 deepx-code）：尾部最近的对话原样保留，更早的内容由模型'
+              '压成一段连贯摘要；若会话已有摘要，则与新增内容合并，保留关键事实、决定、'
+              '待办与用户偏好。压缩不删除任何原始消息，仅影响发送给模型的上下文。',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.5,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          _GroupTitle('参数'),
+          _labeledField(
+            controller: _windowCtrl,
+            label: '上下文窗口（token）',
+            helper: '与当前模型支持的上下文长度保持一致，默认 64000',
+            onChanged: () => setState(() {}),
+          ),
+          const SizedBox(height: 10),
+          _labeledField(
+            controller: _percentCtrl,
+            label: '触发阈值（%）',
+            helper: '估算用量达到窗口的该比例时触发压缩，默认 70',
+            onChanged: () => setState(() {}),
+          ),
+          const SizedBox(height: 10),
+          _labeledField(
+            controller: _tailCtrl,
+            label: '尾部保留（token）',
+            helper: '最近这部分消息不参与压缩，默认 20000',
+          ),
+          const SizedBox(height: 10),
+          _labeledField(
+            controller: _charsCtrl,
+            label: '摘要最大字数',
+            helper: '压缩后摘要的长度上限，默认 800',
+          ),
+          const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              onPressed: _saving ? null : _save,
+              icon: const Icon(Icons.save_outlined, size: 18),
+              label: Text(_saving ? '保存中…' : '保存压缩设置'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _labeledField({
+    required TextEditingController controller,
+    required String label,
+    required String helper,
+    VoidCallback? onChanged,
+  }) {
+    return TextField(
+      controller: controller,
+      keyboardType: TextInputType.number,
+      onChanged: onChanged == null ? null : (_) => onChanged(),
+      decoration: InputDecoration(
+        labelText: label,
+        helperText: helper,
         border: const OutlineInputBorder(),
         isDense: true,
       ),

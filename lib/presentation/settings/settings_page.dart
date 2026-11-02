@@ -13,6 +13,7 @@ import '../../core/platform.dart';
 import '../../core/theme.dart';
 import '../../core/utils.dart';
 import '../../services/apk_downloader.dart';
+import '../../services/context_compressor.dart';
 import '../../services/update_service.dart';
 import '../active_tasks/active_tasks_page.dart';
 import '../memories/memories_page.dart';
@@ -241,6 +242,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
 
           const BackupSection(),
+
+          const Divider(),
+          // v1.2.24 上下文压缩（参考 deepx-code 的分层 + 摘要合并）。
+          _sectionHeader('上下文压缩'),
+          ListTile(
+            leading: const Icon(Icons.compress),
+            title: const Text('上下文压缩'),
+            subtitle: Text(_compressionSubtitle(settings)),
+            onTap: _editContextCompression,
+          ),
 
           const Divider(),
           _sectionHeader('关于'),
@@ -988,6 +999,131 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     // 功能二：全局提示词保存。
     await notifier.set(
         AppConstants.settingGlobalPrompt, globalPromptCtrl.text.trim());
+  }
+
+  /// v1.2.24「上下文压缩」副标题：展示当前生效的压缩配置。
+  String _compressionSubtitle(Map<String, String?> settings) {
+    final config = ContextCompressionConfig.fromSettings(settings);
+    if (!config.enabled) return '已关闭 · 不自动压缩历史上下文';
+    return '窗口 ${config.contextWindow} token · 达 ${config.triggerPercent}%'
+        '（约 ${config.triggerTokens} token）自动压缩 · '
+        '尾部保留 ${config.tailKeepTokens} · 摘要 ≤ ${config.summaryMaxChars} 字';
+  }
+
+  /// v1.2.24「上下文压缩」配置弹窗。
+  ///
+  /// 参考 deepx-code 的压缩策略：达到上下文窗口的触发阈值后，尾部保留
+  /// 最近若干 token 的消息不压缩，更早消息由 LLM 压成摘要并与已有摘要合并。
+  Future<void> _editContextCompression() async {
+    final settings = ref.read(settingsProvider);
+    final config = ContextCompressionConfig.fromSettings(settings);
+    var enabled = config.enabled;
+    final windowCtrl = TextEditingController(text: '${config.contextWindow}');
+    final percentCtrl = TextEditingController(text: '${config.triggerPercent}');
+    final tailCtrl = TextEditingController(text: '${config.tailKeepTokens}');
+    final charsCtrl = TextEditingController(text: '${config.summaryMaxChars}');
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('上下文压缩'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('自动压缩'),
+                  subtitle: const Text('估算用量达到阈值后，自动把较早历史压成摘要'),
+                  value: enabled,
+                  onChanged: (value) => setDialogState(() => enabled = value),
+                ),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: windowCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '上下文窗口（token，默认 64000）',
+                    helperText: '与当前模型支持的上下文长度保持一致',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: percentCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '触发阈值（%，默认 70）',
+                    helperText: '估算用量达到窗口的该比例时触发压缩',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: tailCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '尾部保留（token，默认 20000）',
+                    helperText: '最近这部分消息原样保留，不参与摘要',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: charsCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '摘要最大字数（默认 800）',
+                    helperText: '压缩后摘要的长度上限',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved != true || !mounted) return;
+
+    final window = int.tryParse(windowCtrl.text.trim());
+    final percent = int.tryParse(percentCtrl.text.trim());
+    final tail = int.tryParse(tailCtrl.text.trim());
+    final chars = int.tryParse(charsCtrl.text.trim());
+    if (window == null || window < 1000 || window > 4000000) {
+      _showSnack('上下文窗口需为 1000 ~ 4000000 的整数');
+      return;
+    }
+    if (percent == null || percent < 1 || percent > 100) {
+      _showSnack('触发阈值需为 1 ~ 100 的整数');
+      return;
+    }
+    if (tail == null || tail < 1 || tail >= window) {
+      _showSnack('尾部保留需为不小于 1 且小于上下文窗口的整数');
+      return;
+    }
+    if (chars == null || chars < 100 || chars > 5000) {
+      _showSnack('摘要最大字数需为 100 ~ 5000 的整数');
+      return;
+    }
+
+    final notifier = ref.read(settingsProvider.notifier);
+    await notifier.set(
+        AppConstants.settingContextCompressionEnabled, enabled ? '1' : '0');
+    await notifier.set(AppConstants.settingContextWindowTokens, '$window');
+    await notifier.set(AppConstants.settingContextTriggerPercent, '$percent');
+    await notifier.set(AppConstants.settingContextTailKeepTokens, '$tail');
+    await notifier.set(AppConstants.settingContextSummaryMaxChars, '$chars');
+    if (!mounted) return;
+    _showSnack('上下文压缩设置已保存');
   }
 }
 

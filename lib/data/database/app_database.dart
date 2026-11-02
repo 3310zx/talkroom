@@ -49,7 +49,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 12,
+      version: 13,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -103,6 +103,9 @@ class AppDatabase {
         pinned        INTEGER NOT NULL DEFAULT 0,
         archived      INTEGER NOT NULL DEFAULT 0,
         prompt_template_id INTEGER,
+        context_summary   TEXT,
+        context_summary_upto_id INTEGER,
+        context_summary_updated_at INTEGER,
         last_message  TEXT,
         updated_at    INTEGER NOT NULL,
         created_at    INTEGER NOT NULL
@@ -305,6 +308,35 @@ class AppDatabase {
     // version 11 -> 12：外置记忆库 memories 表（手动收藏 + 自动整理）
     if (oldVersion < 12) {
       await _migrateV12(db);
+    }
+    // version 12 -> 13：conversations 增加上下文压缩摘要三列
+    if (oldVersion < 13) {
+      await _migrateV13(db);
+    }
+  }
+
+  /// version 12 -> 13 迁移：`conversations` 幂等补齐上下文压缩摘要列
+  /// （context_summary / context_summary_upto_id / context_summary_updated_at）。
+  /// 对齐 _onCreate 中 version 13 的完整 schema；老会话三列为 NULL，
+  /// 视为「尚未压缩」，请求组装时正常走全量历史。
+  Future<void> _migrateV13(Database db) async {
+    // 表不存在时（异常残缺库 / 迁移链单元测试的最小库）直接跳过，
+    // 由 _onCreate 或后续建表负责完整 schema，避免 ALTER 抛错中断迁移链。
+    final tables = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'conversations'");
+    if (tables.isEmpty) return;
+    final cols = await db.rawQuery('PRAGMA table_info(conversations)');
+    final existing = cols.map((c) => c['name'] as String).toSet();
+    if (!existing.contains('context_summary')) {
+      await db.execute('ALTER TABLE conversations ADD COLUMN context_summary TEXT');
+    }
+    if (!existing.contains('context_summary_upto_id')) {
+      await db.execute(
+          'ALTER TABLE conversations ADD COLUMN context_summary_upto_id INTEGER');
+    }
+    if (!existing.contains('context_summary_updated_at')) {
+      await db.execute(
+          'ALTER TABLE conversations ADD COLUMN context_summary_updated_at INTEGER');
     }
   }
 

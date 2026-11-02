@@ -4,7 +4,7 @@ abstract final class AppConstants {
   static const String appName = 'Talkroom';
 
   /// 当前应用版本号（与 pubspec.yaml 的 version 保持一致；检查更新时与远端 tag 比对）
-  static const String appVersion = '1.2.23';
+  static const String appVersion = '1.2.24';
 
   /// 未绑定 API 配置时的会话标题
   static const String defaultConversationTitle = '新会话';
@@ -126,4 +126,30 @@ abstract final class AppConstants {
   static const int memorySummaryMaxChars = 8000;
   /// 自动整理去重重叠阈值：与已有记忆文本重叠超过该比例则跳过（功能四）。
   static const double memorySummaryOverlapRatio = 0.3;
+
+  // ---- 上下文自动压缩（参考 deepx-code 分层 + 摘要合并方案） ----
+
+  /// 是否启用自动压缩（'1'/'0'，默认开启；仅在显式写入 '0' 时关闭）。
+  static const String settingContextCompressionEnabled =
+      'context_compression_enabled';
+  /// 模型上下文窗口（token）。
+  static const String settingContextWindowTokens = 'context_window_tokens';
+  /// 自动压缩触发阈值（上下文窗口的百分比，1 ~ 100）。
+  static const String settingContextTriggerPercent = 'context_trigger_percent';
+  /// 尾部保留的最近消息 token 预算（更早的消息压成摘要）。
+  static const String settingContextTailKeepTokens = 'context_tail_keep_tokens';
+  /// 摘要最大字数。
+  static const String settingContextSummaryMaxChars =
+      'context_summary_max_chars';
+
+  /// 默认上下文窗口（token）。
+  static const int defaultContextWindowTokens = 64000;
+  /// 默认触发阈值（70%）。
+  static const int defaultContextTriggerPercent = 70;
+  /// 默认尾部保留 token（约 20K）。
+  static const int defaultContextTailKeepTokens = 20000;
+  /// 默认摘要最大字数。
+  static const int defaultContextSummaryMaxChars = 800;
+  /// 摘要注入 system 段的标题（请求组装时使用，便于模型区分）。
+  static const String contextSummarySectionTitle = '历史对话摘要';
 }

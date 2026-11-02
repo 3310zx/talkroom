@@ -22,6 +22,15 @@ class Conversation {
   /// 会话默认 System Prompt 模板 id（v1.0.13 / DB version 5 起；null 表示跟随全局设置）
   final int? promptTemplateId;
 
+  /// 历史对话摘要（DB version 13 起；压缩上下文后写入，null / 空串表示尚未压缩）。
+  final String? contextSummary;
+
+  /// 摘要已覆盖到的消息 id（id <= 该值的消息不再参与请求组装）。
+  final int? contextSummaryUptoId;
+
+  /// 摘要最后更新时间（毫秒时间戳）。
+  final int? contextSummaryUpdatedAt;
+
   final String lastMessage;
   final int updatedAt;
   final int createdAt;
@@ -40,11 +49,16 @@ class Conversation {
     this.pinned = false,
     this.archived = false,
     this.promptTemplateId,
+    this.contextSummary,
+    this.contextSummaryUptoId,
+    this.contextSummaryUpdatedAt,
     this.lastMessage = '',
     required this.updatedAt,
     required this.createdAt,
   });
 
+  /// [clearContextSummary] 为 true 时把三个摘要字段全部置空
+  /// （普通 copyWith 无法用 null 覆盖已有值）。
   Conversation copyWith({
     int? id,
     String? title,
@@ -59,6 +73,10 @@ class Conversation {
     bool? pinned,
     bool? archived,
     int? promptTemplateId,
+    String? contextSummary,
+    int? contextSummaryUptoId,
+    int? contextSummaryUpdatedAt,
+    bool clearContextSummary = false,
     String? lastMessage,
     int? updatedAt,
     int? createdAt,
@@ -77,6 +95,14 @@ class Conversation {
       pinned: pinned ?? this.pinned,
       archived: archived ?? this.archived,
       promptTemplateId: promptTemplateId ?? this.promptTemplateId,
+      contextSummary:
+          clearContextSummary ? null : (contextSummary ?? this.contextSummary),
+      contextSummaryUptoId: clearContextSummary
+          ? null
+          : (contextSummaryUptoId ?? this.contextSummaryUptoId),
+      contextSummaryUpdatedAt: clearContextSummary
+          ? null
+          : (contextSummaryUpdatedAt ?? this.contextSummaryUpdatedAt),
       lastMessage: lastMessage ?? this.lastMessage,
       updatedAt: updatedAt ?? this.updatedAt,
       createdAt: createdAt ?? this.createdAt,
@@ -98,6 +124,9 @@ class Conversation {
       'pinned': pinned ? 1 : 0,
       'archived': archived ? 1 : 0,
       'prompt_template_id': promptTemplateId,
+      'context_summary': contextSummary,
+      'context_summary_upto_id': contextSummaryUptoId,
+      'context_summary_updated_at': contextSummaryUpdatedAt,
       'last_message': lastMessage,
       'updated_at': updatedAt,
       'created_at': createdAt,
@@ -119,6 +148,9 @@ class Conversation {
       pinned: (map['pinned'] as int? ?? 0) == 1,
       archived: (map['archived'] as int? ?? 0) == 1,
       promptTemplateId: map['prompt_template_id'] as int?,
+      contextSummary: map['context_summary'] as String?,
+      contextSummaryUptoId: map['context_summary_upto_id'] as int?,
+      contextSummaryUpdatedAt: map['context_summary_updated_at'] as int?,
       lastMessage: map['last_message'] as String? ?? '',
       updatedAt: map['updated_at'] as int? ?? 0,
       createdAt: map['created_at'] as int? ?? 0,
@@ -141,6 +173,9 @@ class Conversation {
       pinned: pinned,
       archived: archived,
       promptTemplateId: promptTemplateId,
+      contextSummary: contextSummary,
+      contextSummaryUptoId: contextSummaryUptoId,
+      contextSummaryUpdatedAt: contextSummaryUpdatedAt,
       lastMessage: lastMessage,
       updatedAt: updatedAt,
       createdAt: createdAt,

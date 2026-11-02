@@ -27,6 +27,7 @@ import '../../domain/models/conversation.dart';
 import '../../domain/models/memory_item.dart';
 import '../../domain/models/message.dart';
 import '../../services/llm_client.dart';
+import '../../services/context_compressor.dart';
 import '../../services/conversation_exporter.dart';
 import '../../services/attachment_parser.dart';
 import '../api_config/api_config_list_page.dart';
@@ -108,6 +109,14 @@ class ChatPage extends ConsumerStatefulWidget {
 
 class _ChatPageState extends ConsumerState<ChatPage> {
   static const int _historyLimit = 20;
+
+  /// v1.2.24：上下文压缩进行中（手动压缩展示进度、避免重复触发）。
+  bool _isCompressing = false;
+
+  /// v1.2.24：自动压缩失败熔断（页面级内存状态，不落库）。
+  /// 连续失败 3 次后本会话暂停自动压缩；手动压缩成功或切换会话时复位。
+  final AutoCompressionCircuitBreaker _compressionBreaker =
+      AutoCompressionCircuitBreaker();
 
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -333,6 +342,57 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 );
               },
             ),
+          // v1.2.24：上下文压缩相关操作（手动压缩 / 查看摘要 / 清除摘要）。
+          if (selected != null)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              tooltip: '更多',
+              onSelected: (value) {
+                switch (value) {
+                  case 'compress':
+                    _manualCompressContext(selected);
+                  case 'view':
+                    _showContextSummary(selected);
+                  case 'clear':
+                    _clearContextSummary(selected);
+                }
+              },
+              itemBuilder: (context) {
+                final hasSummary =
+                    (selected.contextSummary ?? '').trim().isNotEmpty;
+                return <PopupMenuEntry<String>>[
+                  const PopupMenuItem<String>(
+                    value: 'compress',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.compress),
+                      title: Text('压缩上下文'),
+                    ),
+                  ),
+                  if (hasSummary)
+                    const PopupMenuItem<String>(
+                      value: 'view',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.notes),
+                        title: Text('查看历史摘要'),
+                      ),
+                    ),
+                  if (hasSummary)
+                    const PopupMenuItem<String>(
+                      value: 'clear',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.restore),
+                        title: Text('清除历史摘要'),
+                      ),
+                    ),
+                ];
+              },
+            ),
           // Talkroom macOS 桌面端：详情面板展开/收起（两栏默认隐藏）。
           // 断点与 home_page 一致（>=1000），窄窗口不显示按钮避免挤压。
           if (AppPlatform.isMacOS && MediaQuery.of(context).size.width >= 1000)
@@ -352,6 +412,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       ),
       body: Column(
         children: [
+          // v1.2.24：有历史摘要时展示轻量提示（可点开查看摘要全文）。
+          if (selected != null) _buildContextSummaryBanner(context, selected),
           Expanded(
             child: Stack(
               children: [
@@ -417,6 +479,372 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         MaterialPageRoute(builder: (_) => const ApiConfigListPage()),
       );
     }
+  }
+
+  // ---------------- v1.2.24 上下文压缩（分层 + 摘要合并） ----------------
+
+  /// 有历史摘要时展示的轻量提示条（点击可查看摘要全文）。
+  Widget _buildContextSummaryBanner(BuildContext context, Conversation conv) {
+    final summary = (conv.contextSummary ?? '').trim();
+    if (summary.isEmpty) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    final fg = theme.colorScheme.onSecondaryContainer;
+    return Material(
+      color: theme.colorScheme.secondaryContainer,
+      child: InkWell(
+        onTap: () => _showContextSummary(conv),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(
+                children: [
+                  Icon(Icons.compress, size: 14, color: fg),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _isCompressing ? '正在压缩历史上下文…' : '历史已压缩为摘要，点击查看',
+                      style: theme.textTheme.bodySmall?.copyWith(color: fg),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (_isCompressing)
+                    SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.6,
+                        color: fg,
+                      ),
+                    )
+                  else
+                    Text('查看',
+                        style: theme.textTheme.labelSmall?.copyWith(color: fg)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 查看历史摘要全文。
+  void _showContextSummary(Conversation conversation) {
+    final summary = (conversation.contextSummary ?? '').trim();
+    if (summary.isEmpty) {
+      _showSnack('当前会话暂无历史摘要');
+      return;
+    }
+    final updatedAt = conversation.contextSummaryUpdatedAt;
+    final updatedText =
+        updatedAt == null ? '' : '更新于 ${_formatTimestamp(updatedAt)}';
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return AlertDialog(
+          title: const Text('历史对话摘要'),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SelectableText(summary),
+                  if (updatedText.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      updatedText,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  Text(
+                    '摘要仅用于请求上下文，原始消息仍完整保留在聊天记录中。',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 清除历史摘要（仅清空压缩状态，不触碰任何原始消息）。
+  Future<void> _clearContextSummary(Conversation conversation) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('清除历史摘要'),
+        content: const Text('清除后，本会话的较早历史将重新完整参与请求，上下文用量会上升。'
+            '原始消息不受影响，仍可在聊天记录中查看。是否继续？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final cleared = conversation.copyWith(clearContextSummary: true);
+    await ref.read(conversationsProvider.notifier).update(cleared);
+    _syncCompressedConversation(cleared);
+    if (mounted) _showSnack('已清除历史摘要');
+  }
+
+  /// 手动压缩上下文（会话更多菜单入口）：确认 → 调用 LLM → 提示节省量。
+  Future<void> _manualCompressContext(Conversation conversation) async {
+    if (_isCompressing) {
+      _showSnack('正在压缩中，请稍候');
+      return;
+    }
+    if (conversation.id == null) return;
+    final settings = ref.read(settingsProvider);
+    final config = ContextCompressionConfig.fromSettings(settings);
+    final summaryUptoId = conversation.contextSummaryUptoId ?? 0;
+    final unsummarized = ref
+        .read(messagesProvider)
+        .where((m) => m.status == 'done' && (m.id ?? 0) > summaryUptoId)
+        .toList();
+    if (unsummarized.isEmpty) {
+      _showSnack('当前会话暂无可压缩的历史消息');
+      return;
+    }
+    final split =
+        ContextCompressor().splitForTail(unsummarized, config.tailKeepTokens);
+    if (split.older.isEmpty) {
+      _showSnack('历史消息仍在尾部保留预算（约 ${config.tailKeepTokens} token）内，暂无需压缩');
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('压缩上下文'),
+        content: Text('将把较早的 ${split.older.length} 条消息（约 ${split.olderTokens} token）'
+            '压缩成一段摘要，并保留最近 ${split.tail.length} 条消息不压缩。\n\n'
+            '压缩不会删除任何原始消息，只在发送给模型时用摘要替代较早历史。\n'
+            '若已有摘要，将与新内容合并为新摘要。是否继续？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('开始压缩'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final apiConfig =
+        _resolveApiConfig(ref.read(apiConfigsProvider), conversation);
+    if (apiConfig == null) {
+      _showSnack('尚未配置 API，无法压缩上下文');
+      return;
+    }
+    final apiKey = await ApiKeyStore.read(apiConfig.apiKeyRef);
+    if (apiKey == null || apiKey.isEmpty) {
+      _showSnack('API Key 缺失，请到设置页重新填写');
+      return;
+    }
+    final model = _resolveModel(apiConfig, conversation);
+    if (model.isEmpty) {
+      _showSnack('当前 API 配置未填写模型，请到设置页补充');
+      return;
+    }
+
+    setState(() => _isCompressing = true);
+    final outcome = await _runCompression(
+      conversation: conversation,
+      config: config,
+      history: unsummarized,
+      baseUrl: apiConfig.baseUrl,
+      apiKey: apiKey,
+      model: model,
+      temperature: conversation.temperature,
+      topP: conversation.topP,
+      showProgress: true,
+    );
+    if (!mounted) return;
+    setState(() => _isCompressing = false);
+    if (outcome.failed) {
+      // 手动压缩失败不累加熔断计数，仅提示。
+      _showSnack('压缩失败，已保留原状，请稍后重试');
+      return;
+    }
+    final result = outcome.result;
+    if (result == null) {
+      _showSnack('当前会话暂无可压缩的历史消息');
+      return;
+    }
+    // 手动压缩成功即视为恢复：清零自动压缩连续失败计数。
+    _compressionBreaker.recordSuccess();
+    final saved = result.savedTokens > 0 ? result.savedTokens : 0;
+    _showSnack('已压缩 ${result.compressedCount} 条消息，'
+        '估算节省 $saved token（摘要约 ${result.afterTokens} token）');
+  }
+
+  /// 发送前自动压缩：估算用量达到「上下文窗口 × 触发阈值」时压缩。
+  ///
+  /// 返回压缩后的会话（未触发或压缩失败时返回 null，调用方保持原状）。
+  /// 压缩失败一律静默降级，不阻塞用户发送，下次发送会再次尝试。
+  Future<Conversation?> _maybeAutoCompressContext({
+    required Conversation conversation,
+    required ContextCompressionConfig config,
+    required List<ChatMessage> history,
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+    double? temperature,
+    double? topP,
+    required int pendingTokens,
+  }) async {
+    if (!config.enabled || conversation.id == null || _isCompressing) {
+      return null;
+    }
+    // 会话切换时复位熔断计数；已熔断则本次跳过自动压缩（不再打无谓请求）。
+    _compressionBreaker.bindConversation(conversation.id);
+    if (!_compressionBreaker.allowsAutoCompression) return null;
+    final summaryUptoId = conversation.contextSummaryUptoId ?? 0;
+    final unsummarized =
+        history.where((m) => (m.id ?? 0) > summaryUptoId).toList();
+    if (unsummarized.isEmpty) return null;
+
+    // 用量估算 = system 段（全局提示词 / 系统提示词 / 记忆 / 摘要）
+    // + 全部未压缩历史 + 本轮消息，与即将组装的请求保持一致。
+    final settings = ref.read(settingsProvider);
+    var estimate = ContextUsageEstimator.messagesOverhead;
+    estimate += ContextUsageEstimator.estimateTokens(
+        settings[AppConstants.settingGlobalPrompt] ?? '');
+    estimate += ContextUsageEstimator.estimateTokens(
+        conversation.systemPrompt ?? '');
+    // 记忆注入段（上限 5 条 / 2000 字）与结构开销的保守估计。
+    estimate += AppConstants.memoryInjectMaxChars ~/ 4;
+    estimate += ContextUsageEstimator.perMessageOverhead * 2;
+    final existingSummary = (conversation.contextSummary ?? '').trim();
+    if (existingSummary.isNotEmpty) {
+      estimate += ContextUsageEstimator.estimateTokens(existingSummary) +
+          ContextUsageEstimator.perMessageOverhead;
+    }
+    for (final message in unsummarized) {
+      estimate += ContextUsageEstimator.estimateTokens(message.content) +
+          ContextUsageEstimator.perMessageOverhead;
+    }
+    estimate += pendingTokens;
+    if (!config.shouldCompress(estimate)) return null;
+
+    final outcome = await _runCompression(
+      conversation: conversation,
+      config: config,
+      history: unsummarized,
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+      model: model,
+      temperature: temperature,
+      topP: topP,
+      showProgress: false,
+    );
+    if (outcome.failed) {
+      // 仅自动压缩失败累加计数；第 3 次失败当次给出中文提示（只提示一次）。
+      if (_compressionBreaker.recordFailure() && mounted) {
+        _showSnack(_compressionBreaker.pauseHint);
+      }
+      return null;
+    }
+    if (outcome.result == null) return null;
+    _compressionBreaker.recordSuccess();
+    return outcome.conversation;
+  }
+
+  /// 执行一次压缩并持久化压缩状态。
+  ///
+  /// 返回三种状态：成功（[result] 非空）、无需压缩（skipped）、失败（[failed]）。
+  Future<_CompressionOutcome> _runCompression({
+    required Conversation conversation,
+    required ContextCompressionConfig config,
+    required List<ChatMessage> history,
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+    double? temperature,
+    double? topP,
+    required bool showProgress,
+  }) async {
+    final conversationId = conversation.id;
+    if (conversationId == null) return const _CompressionOutcome.skipped();
+    if (showProgress && mounted) setState(() => _isCompressing = true);
+    try {
+      final result = await ContextCompressor()
+          .compress(
+            history: history,
+            existingSummary: conversation.contextSummary,
+            config: config,
+            baseUrl: baseUrl,
+            apiKey: apiKey,
+            model: model,
+            temperature: temperature,
+            topP: topP,
+          )
+          .timeout(const Duration(seconds: 90));
+      if (result == null) return const _CompressionOutcome.skipped();
+      final updated = conversation.copyWith(
+        contextSummary: result.summary,
+        contextSummaryUptoId: result.uptoMessageId,
+        contextSummaryUpdatedAt: DateTime.now().millisecondsSinceEpoch,
+      );
+      await ref.read(conversationsProvider.notifier).update(updated);
+      final latest = _syncCompressedConversation(updated);
+      return _CompressionOutcome.success(result: result, conversation: latest);
+    } catch (_) {
+      // 静默失败：不修改任何状态，保留原状等待下次重试。
+      return const _CompressionOutcome.failure();
+    } finally {
+      if (showProgress && mounted) setState(() => _isCompressing = false);
+    }
+  }
+
+  /// 把压缩状态同步到会话列表与当前选中会话，返回最新的会话对象。
+  Conversation _syncCompressedConversation(Conversation updated) {
+    final latest = ref.read(conversationsProvider).firstWhere(
+          (c) => c.id == updated.id,
+          orElse: () => updated,
+        );
+    if (ref.read(selectedConversationProvider)?.id == updated.id) {
+      ref.read(selectedConversationProvider.notifier).state = latest;
+    }
+    return latest;
+  }
+
+  /// 时间戳格式化（摘要更新时间展示）。
+  String _formatTimestamp(int millis) {
+    final dt = DateTime.fromMillisecondsSinceEpoch(millis);
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${dt.year}-${two(dt.month)}-${two(dt.day)} '
+        '${two(dt.hour)}:${two(dt.minute)}';
   }
 
   Widget _buildInputBar(BuildContext context) {
@@ -764,6 +1192,29 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         }
       }
 
+      // 5.5) 上下文压缩（v1.2.24）：发送前估算本次将发送的上下文用量，
+      //      达到「上下文窗口 × 触发阈值」时先把更早的历史压成摘要，
+      //      再按「摘要 + 尾部最近消息」组装请求（参考 deepx-code 分层方案）。
+      //      压缩失败静默降级（保留原状，不影响本次发送，下次再试）。
+      final compressionConfig = ContextCompressionConfig.fromSettings(settings);
+      final allDoneMessages = ref
+          .read(messagesProvider)
+          .where((m) => m.status == 'done' && m.id != assistantId)
+          .toList();
+      final compressedConversation = await _maybeAutoCompressContext(
+        conversation: conv,
+        config: compressionConfig,
+        history: allDoneMessages,
+        baseUrl: config.baseUrl,
+        apiKey: apiKey,
+        model: model,
+        temperature: temperature,
+        topP: topP,
+        pendingTokens: ContextUsageEstimator.estimateTokens(text) +
+            attachments.length * 64,
+      );
+      if (compressedConversation != null) conv = compressedConversation;
+
       // 6) 组装上下文：system prompt + 最近 N 条 done 消息 + 本次（PRD 4.4.1）。
       //    R9：含附件的用户消息按 OpenAI 多模态格式附加（image_url / file_url
       //    文本块），纯文本消息保持 string content 兼容旧模型。
@@ -801,9 +1252,21 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           });
         }
       }
-      final history = ref
-          .read(messagesProvider)
-          .where((m) => m.status == 'done' && m.id != assistantId)
+      // 上下文压缩：已有摘要时把摘要作为独立 system 段注入
+      // （位于全局提示词 / 系统提示词 / 记忆之后），并跳过已被摘要覆盖的消息。
+      final historySummary = (conv.contextSummary ?? '').trim();
+      if (historySummary.isNotEmpty) {
+        llmMessages.add({
+          'role': 'system',
+          'content': '以下是本次会话较早历史的压缩摘要，请作为背景信息参考：\n'
+              '【${AppConstants.contextSummarySectionTitle}】\n$historySummary',
+        });
+      }
+      // 已压缩进摘要的消息不再参与请求（原始消息仍完整保留在会话记录中，
+      // 用户可正常查看；压缩仅影响发送上下文）。
+      final summaryUptoId = conv.contextSummaryUptoId ?? 0;
+      final history = allDoneMessages
+          .where((m) => (m.id ?? 0) > summaryUptoId)
           .toList();
       final recent = history.length > _historyLimit
           ? history.sublist(history.length - _historyLimit)
@@ -2186,4 +2649,29 @@ class _MessageListView extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// v1.2.24：一次压缩动作的结果（压缩数据 + 持久化后的会话）。
+class _CompressionOutcome {
+  const _CompressionOutcome._({
+    this.result,
+    this.conversation,
+    this.failed = false,
+  });
+
+  /// 压缩成功（摘要已写入会话）。
+  const _CompressionOutcome.success({
+    required ContextCompressionResult result,
+    required Conversation conversation,
+  }) : this._(result: result, conversation: conversation);
+
+  /// 本次无需压缩（无待压缩消息等），不算失败。
+  const _CompressionOutcome.skipped() : this._();
+
+  /// 压缩失败（LLM 异常 / 超时 / 空摘要），用于自动压缩熔断计数。
+  const _CompressionOutcome.failure() : this._(failed: true);
+
+  final ContextCompressionResult? result;
+  final Conversation? conversation;
+  final bool failed;
 }

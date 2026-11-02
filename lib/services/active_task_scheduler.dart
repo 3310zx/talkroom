@@ -211,7 +211,22 @@ class ActiveTaskScheduler {
       final systemPrompt = settings[AppConstants.settingSystemPrompt];
       final globalPrompt = settings[AppConstants.settingGlobalPrompt];
 
-      final messages = _buildMessages(task, systemPrompt, globalPrompt: globalPrompt);
+      // v1.2.24 上下文压缩：目标会话已有历史摘要时同样注入 system 段，
+      // 保证主动消息能看到该会话此前的压缩背景（与聊天链路一致）。
+      String? contextSummary;
+      final targetConversationId = task.targetConversationId;
+      if (targetConversationId != null) {
+        final targetConversation =
+            await _conversationRepository.getById(targetConversationId);
+        contextSummary = targetConversation?.contextSummary;
+      }
+
+      final messages = _buildMessages(
+        task,
+        systemPrompt,
+        globalPrompt: globalPrompt,
+        contextSummary: contextSummary,
+      );
       final result = await _llmClient.chat(
         baseUrl: config.baseUrl,
         apiKey: apiKey,
@@ -502,23 +517,30 @@ class ActiveTaskScheduler {
     await _notifyChanged();
   }
 
-  /// 组装 LLM 请求消息：system（全局提示词 + 全局 + 当前时间） + user（任务 prompt）。
+  /// 组装 LLM 请求消息：system（全局提示词 + 全局 + 会话历史摘要 + 当前时间）
+  /// + user（任务 prompt）。
   ///
   /// 功能二：全局提示词（[globalPrompt]）始终作为 system 第一段注入，
   /// 不被会话 / 模板覆盖。
+  /// v1.2.24：目标会话已有历史压缩摘要时，作为独立段落注入 system，
+  /// 与聊天链路的摘要注入保持一致的语义位置（提示词之后、任务指令之前）。
   List<Map<String, String>> _buildMessages(
       ActiveTask task, String? globalSystemPrompt,
-      {String? globalPrompt}) {
+      {String? globalPrompt, String? contextSummary}) {
     final now = DateTime.now();
     final timeText = '当前本地时间：${now.year}年${now.month.toString().padLeft(2, '0')}月'
         '${now.day.toString().padLeft(2, '0')}日 '
         '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}'
         '（星期${'一二三四五六日'[now.weekday - 1]}）。';
+    final summary = (contextSummary ?? '').trim();
     final system = [
       if (globalPrompt != null && globalPrompt.trim().isNotEmpty)
         globalPrompt.trim(),
       if (globalSystemPrompt != null && globalSystemPrompt.trim().isNotEmpty)
         globalSystemPrompt.trim(),
+      if (summary.isNotEmpty)
+        '以下是该会话较早历史的压缩摘要，请作为背景信息参考：\n'
+            '【${AppConstants.contextSummarySectionTitle}】\n$summary',
       '你是一个主动消息助手。$timeText 请按下面的任务指令直接生成一条消息内容，'
           '不要附加解释或 Markdown 代码块。',
     ].join('\n\n');
