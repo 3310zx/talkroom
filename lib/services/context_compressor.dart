@@ -92,6 +92,15 @@ class ContextCompressionConfig {
     return value.round();
   }
 
+  /// 单次请求的 token 预算（v1.2.25 / P2-08）。
+  ///
+  /// 与 [contextWindow] 同单位（token），取窗口的
+  /// [AppConstants.contextRequestBudgetRatio] 作为组装上限，
+  /// 替代旧的「120000 字符」预算（字符与 token 口径不一致，
+  /// 中文长会话会放行远超窗口的请求）。
+  int get requestTokenBudget =>
+      (contextWindow * AppConstants.contextRequestBudgetRatio).round();
+
   /// 估算用量是否已达到触发阈值。
   bool shouldCompress(int estimatedTokens) =>
       enabled && estimatedTokens >= triggerTokens;
@@ -137,40 +146,83 @@ class AutoCompressionCircuitBreaker {
   /// 触发熔断所需的连续失败次数。
   final int maxConsecutiveFailures;
 
-  int _consecutiveFailures = 0;
+  /// v1.2.25：失败计数按会话保留，切换会话不再清零
+  /// （旧的「切会话即清零」会让「连续 3 次失败」在来回切换会话后失效）。
+  final Map<int, int> _failures = {};
   int? _conversationId;
 
-  /// 当前连续失败次数（仅自动压缩失败累加）。
-  int get consecutiveFailures => _consecutiveFailures;
+  /// 当前会话的连续失败次数（仅自动压缩失败累加）。
+  int get consecutiveFailures =>
+      _conversationId == null ? 0 : (_failures[_conversationId] ?? 0);
 
   /// 是否已熔断（本会话暂停自动压缩）。
-  bool get isOpen => _consecutiveFailures >= maxConsecutiveFailures;
+  bool get isOpen => consecutiveFailures >= maxConsecutiveFailures;
 
   /// 是否仍在尝试自动压缩。
   bool get allowsAutoCompression => !isOpen;
 
-  /// 绑定当前会话：会话切换时清零失败计数。
+  /// 绑定当前会话（仅切换计数视图，不清零失败计数）。
   void bindConversation(int? conversationId) {
-    if (_conversationId == conversationId) return;
     _conversationId = conversationId;
-    _consecutiveFailures = 0;
   }
 
   /// 记录一次自动压缩失败，返回本次是否「刚刚触发熔断」（用于只提示一次）。
   bool recordFailure() {
+    final id = _conversationId;
+    if (id == null) return false;
     final wasOpen = isOpen;
-    _consecutiveFailures++;
+    _failures[id] = (_failures[id] ?? 0) + 1;
     return !wasOpen && isOpen;
   }
 
-  /// 记录一次压缩成功（自动或手动），清零失败计数。
+  /// 记录一次压缩成功（自动或手动）：仅成功时清零当前会话计数。
   void recordSuccess() {
-    _consecutiveFailures = 0;
+    final id = _conversationId;
+    if (id == null) return;
+    _failures[id] = 0;
   }
 
   /// 熔断提示文案（深浅色、桌面/移动端共用）。
   String get pauseHint =>
       '自动压缩已连续失败 $maxConsecutiveFailures 次，已暂停自动压缩，可手动重试';
+}
+
+/// 压缩互斥闸门（v1.2.25）。
+///
+/// 解决两个并发缺陷：
+/// 1. 自动压缩与手动压缩并发（各自打一次非流式摘要请求，双倍计费，
+///    且后完成者覆盖先完成者的摘要）→ [tryStart] 全局互斥；
+/// 2. 压缩进行中清除摘要导致摘要「复生」→ [invalidate] 递增版本号，
+///    压缩完成时用 [isStale] 校验，版本已变则放弃写回（乐观锁）。
+class CompressionGate {
+  bool _busy = false;
+  int _epoch = 0;
+
+  /// 是否有压缩正在进行（自动或手动，两者共用）。
+  bool get isBusy => _busy;
+
+  /// 当前版本号（每次清除摘要递增）。
+  int get epoch => _epoch;
+
+  /// 尝试开始一次压缩：已被占用返回 false。
+  bool tryStart() {
+    if (_busy) return false;
+    _busy = true;
+    return true;
+  }
+
+  /// 结束一次压缩。
+  void finish() {
+    _busy = false;
+  }
+
+  /// 摘要被外部清除/改写：递增版本号，使进行中的压缩写回失效。
+  void invalidate() {
+    _epoch++;
+  }
+
+  /// 以 [startedEpoch] 启动的压缩是否已过期（期间摘要被清除）。
+  bool isStale(int startedEpoch) => startedEpoch != _epoch;
 }
 
 /// 分层结果：待压缩的更早消息 + 原样保留的尾部最近消息。
@@ -304,7 +356,8 @@ class ContextCompressor {
   /// [history] 必须是「尚未被摘要覆盖」的有效消息（调用方按
   /// contextSummaryUptoId 过滤后传入），[existingSummary] 为会话已有摘要。
   /// 无需压缩（无待压缩消息 / 摘要为空）时返回 null。
-  /// LLM 调用失败会抛出 [LlmException]，由调用方静默降级。
+  /// v1.2.25：摘要固定使用低温（不沿用会话采样参数），避免用户把会话温度
+  /// 调到 1.2+ 后摘要跑偏、越发不稳定。
   Future<ContextCompressionResult?> compress({
     required List<ChatMessage> history,
     required String? existingSummary,
@@ -312,8 +365,6 @@ class ContextCompressor {
     required String baseUrl,
     required String apiKey,
     required String model,
-    double? temperature,
-    double? topP,
   }) async {
     final candidates = history
         .where((m) => m.role == 'user' || m.role == 'assistant')
@@ -342,16 +393,19 @@ class ContextCompressor {
         {'role': 'system', 'content': '你是严谨的对话摘要压缩器，只输出中文摘要正文。'},
         {'role': 'user', 'content': prompt},
       ],
-      temperature: temperature,
+      temperature: AppConstants.contextSummaryTemperature,
       maxTokens: maxTokens,
-      topP: topP,
+      topP: 1.0,
     );
     final summary = result.content.trim();
     if (summary.isEmpty) {
       throw const LlmException(LlmErrorType.parse, '摘要结果为空');
     }
-    final capped = summary.length > config.summaryMaxChars
-        ? '${summary.substring(0, config.summaryMaxChars)}…'
+    // v1.2.25：按 runes（Unicode 码点）截断，避免把 emoji 等代理对切成
+    // 孤立代理项（编码后变成 U+FFFD 乱码）。
+    final runes = summary.runes.toList();
+    final capped = runes.length > config.summaryMaxChars
+        ? '${String.fromCharCodes(runes.take(config.summaryMaxChars))}…'
         : summary;
 
     final uptoId = split.older.last.id;

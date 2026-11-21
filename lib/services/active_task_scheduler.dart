@@ -16,6 +16,7 @@ import '../../domain/repositories/conversation_repository.dart';
 import '../../domain/repositories/memory_repository.dart';
 import '../../domain/repositories/message_repository.dart';
 import '../../domain/repositories/settings_repository.dart';
+import 'context_assembler.dart';
 import 'llm_client.dart';
 import 'local_notifications_service.dart';
 
@@ -533,14 +534,14 @@ class ActiveTaskScheduler {
         '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}'
         '（星期${'一二三四五六日'[now.weekday - 1]}）。';
     final summary = (contextSummary ?? '').trim();
+    // v1.2.25（P3-04）：system 段拼接统一走 [ContextAssembler.buildSystemSegments]，
+    // 与聊天链路共用同一实现，避免两处手写拼接随版本漂移。
     final system = [
-      if (globalPrompt != null && globalPrompt.trim().isNotEmpty)
-        globalPrompt.trim(),
-      if (globalSystemPrompt != null && globalSystemPrompt.trim().isNotEmpty)
-        globalSystemPrompt.trim(),
-      if (summary.isNotEmpty)
-        '以下是该会话较早历史的压缩摘要，请作为背景信息参考：\n'
-            '【${AppConstants.contextSummarySectionTitle}】\n$summary',
+      ...ContextAssembler.buildSystemSegments(
+        globalPrompt: globalPrompt,
+        systemPrompt: globalSystemPrompt,
+        contextSummary: summary.isEmpty ? null : summary,
+      ).map((segment) => segment.trim()),
       '你是一个主动消息助手。$timeText 请按下面的任务指令直接生成一条消息内容，'
           '不要附加解释或 Markdown 代码块。',
     ].join('\n\n');

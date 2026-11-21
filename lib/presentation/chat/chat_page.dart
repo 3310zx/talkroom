@@ -27,6 +27,7 @@ import '../../domain/models/conversation.dart';
 import '../../domain/models/memory_item.dart';
 import '../../domain/models/message.dart';
 import '../../services/llm_client.dart';
+import '../../services/context_assembler.dart';
 import '../../services/context_compressor.dart';
 import '../../services/conversation_exporter.dart';
 import '../../services/attachment_parser.dart';
@@ -110,11 +111,16 @@ class ChatPage extends ConsumerStatefulWidget {
 class _ChatPageState extends ConsumerState<ChatPage> {
   static const int _historyLimit = 20;
 
-  /// v1.2.24：上下文压缩进行中（手动压缩展示进度、避免重复触发）。
-  bool _isCompressing = false;
+  /// v1.2.25：压缩互斥闸门（自动 / 手动共用，解决并发双打摘要请求；
+  /// 并用版本号做「清除摘要」与「压缩写回」的乐观锁）。
+  final CompressionGate _compressionGate = CompressionGate();
+
+  /// 是否有压缩正在进行（只读视图，UI 与守卫统一读取此值）。
+  bool get _isCompressing => _compressionGate.isBusy;
 
   /// v1.2.24：自动压缩失败熔断（页面级内存状态，不落库）。
-  /// 连续失败 3 次后本会话暂停自动压缩；手动压缩成功或切换会话时复位。
+  /// 连续失败 3 次后本会话暂停自动压缩；v1.2.25 起按会话保留计数，
+  /// 仅在压缩成功时清零（切换会话不再清零）。
   final AutoCompressionCircuitBreaker _compressionBreaker =
       AutoCompressionCircuitBreaker();
 
@@ -483,16 +489,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   // ---------------- v1.2.24 上下文压缩（分层 + 摘要合并） ----------------
 
-  /// 有历史摘要时展示的轻量提示条（点击可查看摘要全文）。
+  /// 有历史摘要或正在压缩时展示的轻量提示条（点击可查看摘要全文）。
+  ///
+  /// v1.2.25：条件从「摘要非空」改为「摘要非空 || 压缩中」，
+  /// 解决首次手动压缩（摘要尚为空）期间完全无进度反馈的问题。
   Widget _buildContextSummaryBanner(BuildContext context, Conversation conv) {
     final summary = (conv.contextSummary ?? '').trim();
-    if (summary.isEmpty) return const SizedBox.shrink();
+    if (summary.isEmpty && !_isCompressing) return const SizedBox.shrink();
     final theme = Theme.of(context);
     final fg = theme.colorScheme.onSecondaryContainer;
     return Material(
       color: theme.colorScheme.secondaryContainer,
       child: InkWell(
-        onTap: () => _showContextSummary(conv),
+        onTap: summary.isEmpty ? null : () => _showContextSummary(conv),
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 760),
@@ -588,6 +597,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   /// 清除历史摘要（仅清空压缩状态，不触碰任何原始消息）。
   Future<void> _clearContextSummary(Conversation conversation) async {
+    // v1.2.25（P2-06）：压缩进行中禁止清除 —— 否则压缩完成时会把摘要写回，
+    // 用户看到「已清除」但摘要仍在（摘要复生）。
+    if (_isCompressing) {
+      _showSnack('正在压缩历史上下文，请等待完成后再清除摘要');
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -607,10 +622,18 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       ),
     );
     if (confirmed != true) return;
-    final cleared = conversation.copyWith(clearContextSummary: true);
-    await ref.read(conversationsProvider.notifier).update(cleared);
-    _syncCompressedConversation(cleared);
-    if (mounted) _showSnack('已清除历史摘要');
+    // 乐观锁：递增版本号，使任何「清除前已在途」的压缩写回失效。
+    _compressionGate.invalidate();
+    await ref
+        .read(conversationsProvider.notifier)
+        .updateContextSummary(conversation.id!, null, null, null);
+    if (!mounted) return;
+    final latest = ref
+        .read(conversationsProvider)
+        .firstWhere((c) => c.id == conversation.id,
+            orElse: () => conversation.copyWith(clearContextSummary: true));
+    _syncCompressedConversation(latest);
+    _showSnack('已清除历史摘要');
   }
 
   /// 手动压缩上下文（会话更多菜单入口）：确认 → 调用 LLM → 提示节省量。
@@ -622,6 +645,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (conversation.id == null) return;
     final settings = ref.read(settingsProvider);
     final config = ContextCompressionConfig.fromSettings(settings);
+    // v1.2.25（P3-07）：尾部保留预算 ≥ 触发阈值时，压缩永远切不出「更早消息」，
+    // 只能空转。此处给出明确可操作提示，而不是笼统的「暂无需压缩」。
+    if (config.tailKeepTokens >= config.triggerTokens) {
+      _showSnack('尾部保留预算（${config.tailKeepTokens} token）已达到或超过触发阈值'
+          '（${config.triggerTokens} token），压缩无法产生待压缩内容。'
+          '请到设置页调小「尾部保留 token」，或调大「上下文窗口 / 触发阈值」');
+      return;
+    }
     final summaryUptoId = conversation.contextSummaryUptoId ?? 0;
     final unsummarized = ref
         .read(messagesProvider)
@@ -677,7 +708,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       return;
     }
 
-    setState(() => _isCompressing = true);
     final outcome = await _runCompression(
       conversation: conversation,
       config: config,
@@ -685,12 +715,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       baseUrl: apiConfig.baseUrl,
       apiKey: apiKey,
       model: model,
-      temperature: conversation.temperature,
-      topP: conversation.topP,
       showProgress: true,
     );
     if (!mounted) return;
-    setState(() => _isCompressing = false);
     if (outcome.failed) {
       // 手动压缩失败不累加熔断计数，仅提示。
       _showSnack('压缩失败，已保留原状，请稍后重试');
@@ -704,8 +731,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     // 手动压缩成功即视为恢复：清零自动压缩连续失败计数。
     _compressionBreaker.recordSuccess();
     final saved = result.savedTokens > 0 ? result.savedTokens : 0;
+    // v1.2.25（P3-06）：明确标注为「估算」，并显示摘要实际长度，
+    // 避免用户误以为是服务端计费节省。
     _showSnack('已压缩 ${result.compressedCount} 条消息，'
-        '估算节省 $saved token（摘要约 ${result.afterTokens} token）');
+        '估算节省 $saved token（摘要 ${result.summary.length} 字，'
+        '约 ${result.afterTokens} token；实际计费以服务端为准）');
   }
 
   /// 发送前自动压缩：估算用量达到「上下文窗口 × 触发阈值」时压缩。
@@ -716,17 +746,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     required Conversation conversation,
     required ContextCompressionConfig config,
     required List<ChatMessage> history,
+    required String? systemPrompt,
+    required List<String> memoryLines,
+    required String pendingText,
+    required List<MessageAttachment> pendingAttachments,
+    required bool appendCurrentUser,
     required String baseUrl,
     required String apiKey,
     required String model,
-    double? temperature,
-    double? topP,
-    required int pendingTokens,
   }) async {
     if (!config.enabled || conversation.id == null || _isCompressing) {
       return null;
     }
-    // 会话切换时复位熔断计数；已熔断则本次跳过自动压缩（不再打无谓请求）。
+    // v1.2.25（P3-05）：绑定当前会话，切换会话不再清零失败计数。
     _compressionBreaker.bindConversation(conversation.id);
     if (!_compressionBreaker.allowsAutoCompression) return null;
     final summaryUptoId = conversation.contextSummaryUptoId ?? 0;
@@ -734,28 +766,31 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         history.where((m) => (m.id ?? 0) > summaryUptoId).toList();
     if (unsummarized.isEmpty) return null;
 
-    // 用量估算 = system 段（全局提示词 / 系统提示词 / 记忆 / 摘要）
-    // + 全部未压缩历史 + 本轮消息，与即将组装的请求保持一致。
-    final settings = ref.read(settingsProvider);
-    var estimate = ContextUsageEstimator.messagesOverhead;
-    estimate += ContextUsageEstimator.estimateTokens(
-        settings[AppConstants.settingGlobalPrompt] ?? '');
-    estimate += ContextUsageEstimator.estimateTokens(
-        conversation.systemPrompt ?? '');
-    // 记忆注入段（上限 5 条 / 2000 字）与结构开销的保守估计。
-    estimate += AppConstants.memoryInjectMaxChars ~/ 4;
-    estimate += ContextUsageEstimator.perMessageOverhead * 2;
-    final existingSummary = (conversation.contextSummary ?? '').trim();
-    if (existingSummary.isNotEmpty) {
-      estimate += ContextUsageEstimator.estimateTokens(existingSummary) +
-          ContextUsageEstimator.perMessageOverhead;
-    }
-    for (final message in unsummarized) {
-      estimate += ContextUsageEstimator.estimateTokens(message.content) +
-          ContextUsageEstimator.perMessageOverhead;
-    }
-    estimate += pendingTokens;
+    // v1.2.25（P2-01 / P2-02 / P2-03 / P2-08）：估算与真实组装共用
+    // [ContextAssembler] —— system 段解析结果提前复用、只统计尾部 20 条、
+    // 附件解析文本与图片计入、按 token 预算统计，口径与请求完全一致。
+    final estimate = ContextAssembler.assemble(
+      globalPrompt:
+          ref.read(settingsProvider)[AppConstants.settingGlobalPrompt],
+      systemPrompt: systemPrompt,
+      memoryLines: memoryLines,
+      contextSummary: conversation.contextSummary,
+      history: history,
+      summaryUptoId: summaryUptoId,
+      historyLimit: _historyLimit,
+      tokenBudget: config.requestTokenBudget,
+      currentUserText: pendingText,
+      currentAttachments: pendingAttachments,
+      appendCurrentUser: appendCurrentUser,
+      buildContent: _buildMultimodalContent,
+    ).estimateTokens;
     if (!config.shouldCompress(estimate)) return null;
+
+    // v1.2.25（P2-09）：压缩已提前到占位气泡创建之前，此处显式提示进度，
+    // 避免最长 90 秒内界面毫无反馈。
+    if (mounted) {
+      _showSnack('上下文接近上限，正在压缩历史上下文…（最长约 90 秒）');
+    }
 
     final outcome = await _runCompression(
       conversation: conversation,
@@ -764,8 +799,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       baseUrl: baseUrl,
       apiKey: apiKey,
       model: model,
-      temperature: temperature,
-      topP: topP,
       showProgress: false,
     );
     if (outcome.failed) {
@@ -782,7 +815,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   /// 执行一次压缩并持久化压缩状态。
   ///
-  /// 返回三种状态：成功（[result] 非空）、无需压缩（skipped）、失败（[failed]）。
+  /// 返回三种状态：成功（[result] 非空）、无需压缩 / 压缩被互斥跳过（skipped）、
+  /// 失败（[failed]）。
+  ///
+  /// v1.2.25 修复：
+  /// - P2-05：压缩互斥由 [CompressionGate] 统一持有，自动 / 手动路径共用，
+  ///   不再依赖 `showProgress` 才置位，避免两次摘要请求并发。
+  /// - P1-02：写回只更新摘要三列（`updateContextSummary`），不再整行覆盖，
+  ///   避免把并发修改的标题 / 最后消息 / 温度等字段回退。
+  /// - P2-06：写回前用闸门版本号做乐观锁，摘要已被清除则放弃写回。
+  /// - P3-03：摘要请求固定低温度，不再沿用会话高温。
   Future<_CompressionOutcome> _runCompression({
     required Conversation conversation,
     required ContextCompressionConfig config,
@@ -790,13 +832,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     required String baseUrl,
     required String apiKey,
     required String model,
-    double? temperature,
-    double? topP,
     required bool showProgress,
   }) async {
     final conversationId = conversation.id;
     if (conversationId == null) return const _CompressionOutcome.skipped();
-    if (showProgress && mounted) setState(() => _isCompressing = true);
+    // 互斥：已有压缩在途时直接跳过（不重复计费，也不算失败）。
+    if (!_compressionGate.tryStart()) {
+      return const _CompressionOutcome.skipped();
+    }
+    final startedEpoch = _compressionGate.epoch;
+    if (showProgress && mounted) setState(() {});
     try {
       final result = await ContextCompressor()
           .compress(
@@ -806,24 +851,38 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             baseUrl: baseUrl,
             apiKey: apiKey,
             model: model,
-            temperature: temperature,
-            topP: topP,
           )
           .timeout(const Duration(seconds: 90));
       if (result == null) return const _CompressionOutcome.skipped();
-      final updated = conversation.copyWith(
-        contextSummary: result.summary,
-        contextSummaryUptoId: result.uptoMessageId,
-        contextSummaryUpdatedAt: DateTime.now().millisecondsSinceEpoch,
-      );
-      await ref.read(conversationsProvider.notifier).update(updated);
-      final latest = _syncCompressedConversation(updated);
+      // 乐观锁：压缩期间摘要被清除（版本号变化）→ 丢弃本次结果。
+      if (_compressionGate.isStale(startedEpoch)) {
+        return const _CompressionOutcome.skipped();
+      }
+      final updatedAt = DateTime.now().millisecondsSinceEpoch;
+      await ref
+          .read(conversationsProvider.notifier)
+          .updateContextSummary(
+              conversationId, result.summary, result.uptoMessageId, updatedAt);
+      if (!mounted) {
+        return _CompressionOutcome.success(
+            result: result, conversation: conversation);
+      }
+      final latest = ref.read(conversationsProvider).firstWhere(
+            (c) => c.id == conversationId,
+            orElse: () => conversation.copyWith(
+              contextSummary: result.summary,
+              contextSummaryUptoId: result.uptoMessageId,
+              contextSummaryUpdatedAt: updatedAt,
+            ),
+          );
+      _syncCompressedConversation(latest);
       return _CompressionOutcome.success(result: result, conversation: latest);
     } catch (_) {
       // 静默失败：不修改任何状态，保留原状等待下次重试。
       return const _CompressionOutcome.failure();
     } finally {
-      if (showProgress && mounted) setState(() => _isCompressing = false);
+      _compressionGate.finish();
+      if (showProgress && mounted) setState(() {});
     }
   }
 
@@ -1124,29 +1183,26 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // 2) 用户消息即时落库并显示。
       //    变体保留模式（keepOriginal）跳过：原用户消息与回复已在列表中，
       //    重复落库会制造冗余用户消息，故仅追加新的助手回复。
+      //    v1.2.25（P1-01）：记录本轮 user 消息 id，组装历史时按 id 剔除，
+      //    否则 messagesProvider 已含该消息，末尾又追加一次 → user 段重复注入。
+      int? userMessageId;
       if (!keepOriginal) {
-        await ref.read(messagesProvider.notifier).add(ChatMessage(
-              conversationId: conversationId,
-              role: 'user',
-              content: text,
-              status: 'done',
-              createdAt: now,
-              attachments: attachments,
-            ));
+        userMessageId =
+            await ref.read(messagesProvider.notifier).add(ChatMessage(
+                  conversationId: conversationId,
+                  role: 'user',
+                  content: text,
+                  status: 'done',
+                  createdAt: now,
+                  attachments: attachments,
+                ));
         await _updateConversationMeta(conversationId, _summarize(text), now);
       }
       _scrollToBottom();
 
-      // 3) 助手占位消息（streaming），流式增量更新其内容。
-      final assistantId =
-          await ref.read(messagesProvider.notifier).add(ChatMessage(
-                conversationId: conversationId,
-                role: 'assistant',
-                content: '',
-                status: 'streaming',
-                createdAt: now + 1,
-              ));
-      _currentAssistantId = assistantId;
+      // 3) 助手占位消息延后到上下文压缩之后创建（v1.2.25 / P2-09）：
+      //    压缩最长 90 秒，若先建占位气泡会出现长时间空白 streaming 态，
+      //    用户误以为卡死。
 
       // 4) 解析 API 配置与密钥。
       final config = _resolveApiConfig(ref.read(apiConfigsProvider), conv);
@@ -1192,121 +1248,93 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         }
       }
 
-      // 5.5) 上下文压缩（v1.2.24）：发送前估算本次将发送的上下文用量，
-      //      达到「上下文窗口 × 触发阈值」时先把更早的历史压成摘要，
+      // 5.5) 上下文压缩（v1.2.24 / v1.2.25）：发送前估算本次将发送的上下文
+      //      用量，达到「上下文窗口 × 触发阈值」时先把更早的历史压成摘要，
       //      再按「摘要 + 尾部最近消息」组装请求（参考 deepx-code 分层方案）。
       //      压缩失败静默降级（保留原状，不影响本次发送，下次再试）。
       final compressionConfig = ContextCompressionConfig.fromSettings(settings);
-      final allDoneMessages = ref
+      // 记忆注入（功能三）：置顶优先 + 最近，上限 5 条 / 2000 字（决策 D6）。
+      // v1.2.25（P2-02）：提前到压缩判定之前构造，估算与真实组装复用同一份。
+      final memories = await ref
+          .read(appDatabaseProvider)
+          .memoryRepository
+          .listByConversation(conversationId);
+      final memoryLines = <String>[];
+      var memoryChars = 0;
+      for (final item in memories.take(AppConstants.memoryInjectMaxCount)) {
+        final line = item.content.trim();
+        if (line.isEmpty) continue;
+        if (memoryChars + line.length > AppConstants.memoryInjectMaxChars) {
+          break;
+        }
+        memoryChars += line.length;
+        memoryLines.add('- $line');
+      }
+      // 历史候选：全部已完成（done）消息，剔除本轮刚落库的 user 消息（P1-01）。
+      final historyMessages = ref
           .read(messagesProvider)
-          .where((m) => m.status == 'done' && m.id != assistantId)
+          .where((m) =>
+              m.status == 'done' &&
+              (userMessageId == null || m.id != userMessageId))
           .toList();
       final compressedConversation = await _maybeAutoCompressContext(
         conversation: conv,
         config: compressionConfig,
-        history: allDoneMessages,
+        history: historyMessages,
+        systemPrompt: systemPrompt,
+        memoryLines: memoryLines,
+        pendingText: text,
+        pendingAttachments: attachments,
+        appendCurrentUser: !keepOriginal,
         baseUrl: config.baseUrl,
         apiKey: apiKey,
         model: model,
-        temperature: temperature,
-        topP: topP,
-        pendingTokens: ContextUsageEstimator.estimateTokens(text) +
-            attachments.length * 64,
       );
       if (compressedConversation != null) conv = compressedConversation;
+
+      // 5.6) 助手占位消息（streaming），流式增量更新其内容。
+      //      v1.2.25（P2-09）：放在压缩之后创建，避免 90 秒空白 streaming 态。
+      final assistantId =
+          await ref.read(messagesProvider.notifier).add(ChatMessage(
+                conversationId: conversationId,
+                role: 'assistant',
+                content: '',
+                status: 'streaming',
+                createdAt: now + 1,
+              ));
+      _currentAssistantId = assistantId;
+      _scrollToBottom();
 
       // 6) 组装上下文：system prompt + 最近 N 条 done 消息 + 本次（PRD 4.4.1）。
       //    R9：含附件的用户消息按 OpenAI 多模态格式附加（image_url / file_url
       //    文本块），纯文本消息保持 string content 兼容旧模型。
       //    功能二：全局提示词（global_prompt）始终作为 system 第一段注入，
       //    不受会话 / 模板覆盖；功能三：当前会话记忆注入 system 段。
-      final globalPrompt = settings[AppConstants.settingGlobalPrompt] ?? '';
-      final llmMessages = <Map<String, dynamic>>[];
-      if (globalPrompt.trim().isNotEmpty) {
-        llmMessages.add({'role': 'system', 'content': globalPrompt});
-      }
-      if (systemPrompt != null && systemPrompt.trim().isNotEmpty) {
-        llmMessages.add({'role': 'system', 'content': systemPrompt});
-      }
-      // 记忆注入（功能三）：置顶优先 + 最近，上限 5 条 / 2000 字（决策 D6）。
-      final memories = await ref
-          .read(appDatabaseProvider)
-          .memoryRepository
-          .listByConversation(conversationId);
-      if (memories.isNotEmpty) {
-        final memoryLines = <String>[];
-        var memoryChars = 0;
-        for (final item in memories.take(AppConstants.memoryInjectMaxCount)) {
-          final line = item.content.trim();
-          if (line.isEmpty) continue;
-          if (memoryChars + line.length > AppConstants.memoryInjectMaxChars) {
-            break;
-          }
-          memoryChars += line.length;
-          memoryLines.add('- $line');
-        }
-        if (memoryLines.isNotEmpty) {
-          llmMessages.add({
-            'role': 'system',
-            'content': '以下是本会话的关键记忆，请参考：\n${memoryLines.join('\n')}',
-          });
-        }
-      }
-      // 上下文压缩：已有摘要时把摘要作为独立 system 段注入
-      // （位于全局提示词 / 系统提示词 / 记忆之后），并跳过已被摘要覆盖的消息。
-      final historySummary = (conv.contextSummary ?? '').trim();
-      if (historySummary.isNotEmpty) {
-        llmMessages.add({
-          'role': 'system',
-          'content': '以下是本次会话较早历史的压缩摘要，请作为背景信息参考：\n'
-              '【${AppConstants.contextSummarySectionTitle}】\n$historySummary',
-        });
-      }
-      // 已压缩进摘要的消息不再参与请求（原始消息仍完整保留在会话记录中，
-      // 用户可正常查看；压缩仅影响发送上下文）。
-      final summaryUptoId = conv.contextSummaryUptoId ?? 0;
-      final history = allDoneMessages
-          .where((m) => (m.id ?? 0) > summaryUptoId)
-          .toList();
-      final recent = history.length > _historyLimit
-          ? history.sublist(history.length - _historyLimit)
-          : history;
-      // P2-13：请求总长度预算 —— 已用字符（系统提示词段 + 记忆注入段）
-      // 与 history / 尾部 user 段共享上限，超限从最旧历史开始截断，
-      // 始终保留最新消息，防止单条请求撑爆模型上下文。
-      var usedChars = 0;
-      for (final seg in llmMessages) {
-        final c = seg['content'];
-        if (c is String) usedChars += c.length;
-      }
-      const reservedForTail = 4000; // 为 keepOriginal 场景的 user + 指令段预留
-      for (final m in recent) {
-        if (usedChars + m.content.length + reservedForTail >
-            AppConstants.requestContextMaxChars) {
-          break;
-        }
-        usedChars += m.content.length;
-        llmMessages.add({
-          'role': m.role == 'user' ? 'user' : 'assistant',
-          'content': m.role == 'user' && m.attachments.isNotEmpty
-              ? _buildMultimodalContent(m.content, m.attachments)
-              : m.content,
-        });
-      }
-      // keepOriginal（变体保留模式）：原用户消息已包含在 history 中，
-      // 不再重复追加 user 段；仅注入变体指令，新回复作为新消息追加。
-      if (!keepOriginal) {
-        llmMessages.add({
-          'role': 'user',
-          'content': _buildMultimodalContent(text, attachments),
-        });
-      }
-      // 功能一：消息变体附加指令 —— 独立 user 消息注入（不落库），
-      // 不篡改原文，对任意 OpenAI 兼容 API 均安全。
-      final instruction = userInstruction?.trim();
-      if (instruction != null && instruction.isNotEmpty) {
-        llmMessages.add({'role': 'user', 'content': instruction});
-      }
+      // v1.2.25（P3-04）：组装统一走 [ContextAssembler]，与主动消息调度器
+      // 共用同一实现 —— global 提示词 → system prompt → 记忆 → 摘要 →
+      // 尾部历史 → 本轮消息，避免两处手写拼接漂移。
+      // v1.2.25（P2-04 / P2-08）：预算按 token 计算，取「上下文窗口 × 90%」，
+      // 从最新往回累加，单条超长时跳过而非终止，确保最新对话必达。
+      final assembly = ContextAssembler.assemble(
+        globalPrompt: settings[AppConstants.settingGlobalPrompt],
+        systemPrompt: systemPrompt,
+        memoryLines: memoryLines,
+        contextSummary: conv.contextSummary,
+        history: historyMessages,
+        summaryUptoId: conv.contextSummaryUptoId ?? 0,
+        historyLimit: _historyLimit,
+        tokenBudget: compressionConfig.requestTokenBudget,
+        currentUserText: text,
+        currentAttachments: attachments,
+        appendCurrentUser: !keepOriginal,
+        userInstruction: userInstruction,
+        buildContent: _buildMultimodalContent,
+      );
+      final llmMessages = assembly.messages;
+      // keepOriginal（变体保留模式）：原用户消息已在 history 中（appendCurrentUser
+      // 为 false），仅注入变体指令，新回复作为新消息追加。
+      // 功能一：消息变体附加指令由 [ContextAssembler] 作为独立 user 段追加
+      //（不落库、不篡改原文，并已计入 token 预算）。
 
       // 7) SSE 流式请求：增量更新气泡。
       final result = await LlmClient().chatStream(

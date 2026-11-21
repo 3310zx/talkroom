@@ -98,9 +98,14 @@ abstract final class BackupService {
           lastMessage: c.lastMessage,
           updatedAt: c.updatedAt,
           createdAt: c.createdAt,
+          // v1.2.25（P2-07）：导出压缩摘要三列，避免恢复后历史全量重发。
+          contextSummary: c.contextSummary,
+          contextSummaryUptoId: c.contextSummaryUptoId,
+          contextSummaryUpdatedAt: c.contextSummaryUpdatedAt,
           messages: msgs
               .map(
                 (m) => BackupMessage(
+                  refId: m.id,
                   role: m.role,
                   content: m.content,
                   contentType: m.contentType,
@@ -624,6 +629,9 @@ abstract final class BackupService {
         conversationIdMap[c.refId ?? convId] = convId;
         report.conversationsImported++;
 
+        // v1.2.25（P2-07）：导入后消息 id 会重排，需按导出时的 ref_id 重映射
+        // 摘要游标 context_summary_upto_id。
+        int? remappedUptoId;
         for (final m in c.messages) {
           final msgMap = <String, Object?>{
             'conversation_id': convId,
@@ -643,8 +651,38 @@ abstract final class BackupService {
             'cached_tokens': m.cachedTokens,
             // 同步字段不随备份写入（device_id / server_id / updated_at = NULL）
           };
-          await txn.insert('messages', msgMap);
+          final newMsgId = await txn.insert('messages', msgMap);
           report.messagesImported++;
+          final refId = m.refId;
+          if (refId != null &&
+              c.contextSummaryUptoId != null &&
+              refId <= c.contextSummaryUptoId!) {
+            remappedUptoId = newMsgId;
+          }
+        }
+
+        // 摘要三列：仅在游标可解析时写入，避免游标指向不存在的消息
+        // 导致历史被错误过滤；游标丢失时按「未压缩」处理（历史全量重发）。
+        final summaryText = c.contextSummary;
+        if (summaryText != null && summaryText.isNotEmpty) {
+          if (remappedUptoId != null) {
+            await txn.update(
+              'conversations',
+              {
+                'context_summary': summaryText,
+                'context_summary_upto_id': remappedUptoId,
+                'context_summary_updated_at':
+                    c.contextSummaryUpdatedAt ?? now,
+              },
+              where: 'id = ?',
+              whereArgs: [convId],
+            );
+          } else {
+            report.notes.add(
+              '会话「${c.title}」的历史摘要因游标无法映射已跳过，'
+              '导入后按未压缩处理。',
+            );
+          }
         }
       }
 

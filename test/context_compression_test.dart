@@ -369,63 +369,73 @@ void main() {
     });
   });
 
-  group('自动压缩失败熔断（v1.2.24）', () {
+  group('自动压缩失败熔断（v1.2.24 / v1.2.25 按会话保留计数）', () {
     test('连续失败计数递增，第 3 次触发熔断', () {
       final breaker = AutoCompressionCircuitBreaker();
+      breaker.bindConversation(1);
       expect(breaker.consecutiveFailures, 0);
       expect(breaker.isOpen, isFalse);
-
       expect(breaker.recordFailure(), isFalse);
       expect(breaker.consecutiveFailures, 1);
       expect(breaker.allowsAutoCompression, isTrue);
-
       expect(breaker.recordFailure(), isFalse);
       expect(breaker.consecutiveFailures, 2);
       expect(breaker.allowsAutoCompression, isTrue);
-
-      // 第 3 次失败当次触发熔断，返回 true 用于提示一次。
       expect(breaker.recordFailure(), isTrue);
       expect(breaker.consecutiveFailures, 3);
       expect(breaker.isOpen, isTrue);
       expect(breaker.allowsAutoCompression, isFalse);
     });
-
+    test('未绑定会话时失败不计数（避免串会话污染）', () {
+      final breaker = AutoCompressionCircuitBreaker();
+      expect(breaker.recordFailure(), isFalse);
+      expect(breaker.consecutiveFailures, 0);
+      expect(breaker.isOpen, isFalse);
+    });
     test('熔断后继续失败不再重复提示', () {
       final breaker = AutoCompressionCircuitBreaker();
+      breaker.bindConversation(1);
       for (var i = 0; i < 3; i++) {
         breaker.recordFailure();
       }
       expect(breaker.recordFailure(), isFalse);
       expect(breaker.consecutiveFailures, 4);
     });
-
     test('手动压缩成功（recordSuccess）清零失败计数并解除熔断', () {
-      final breaker = AutoCompressionCircuitBreaker();
-      for (var i = 0; i < 3; i++) {
-        breaker.recordFailure();
-      }
-      expect(breaker.isOpen, isTrue);
-
-      breaker.recordSuccess();
-      expect(breaker.consecutiveFailures, 0);
-      expect(breaker.isOpen, isFalse);
-      expect(breaker.allowsAutoCompression, isTrue);
-    });
-
-    test('切换会话重置失败计数', () {
       final breaker = AutoCompressionCircuitBreaker();
       breaker.bindConversation(1);
       for (var i = 0; i < 3; i++) {
         breaker.recordFailure();
       }
       expect(breaker.isOpen, isTrue);
-
-      // 切到另一个会话 → 计数清零，自动压缩恢复尝试。
+      breaker.recordSuccess();
+      expect(breaker.consecutiveFailures, 0);
+      expect(breaker.isOpen, isFalse);
+      expect(breaker.allowsAutoCompression, isTrue);
+    });
+    test('切换会话不清零失败计数，且各会话计数互不干扰（P3-05）', () {
+      final breaker = AutoCompressionCircuitBreaker();
+      breaker.bindConversation(1);
+      for (var i = 0; i < 3; i++) {
+        breaker.recordFailure();
+      }
+      expect(breaker.isOpen, isTrue);
+      // 切到会话 2：会话 1 的熔断状态仍保留，切回后依然熔断。
       breaker.bindConversation(2);
       expect(breaker.consecutiveFailures, 0);
       expect(breaker.allowsAutoCompression, isTrue);
+      breaker.recordFailure();
+      expect(breaker.consecutiveFailures, 1);
+      breaker.bindConversation(1);
+      expect(breaker.consecutiveFailures, 3);
+      expect(breaker.isOpen, isTrue);
+      // 会话 2 的计数不受会话 1 成功清零影响。
+      breaker.recordSuccess();
+      breaker.bindConversation(2);
+      expect(breaker.consecutiveFailures, 1);
+      breaker.bindConversation(1);
+      expect(breaker.consecutiveFailures, 0);
     });
-
     test('同一会话重复绑定不清零', () {
       final breaker = AutoCompressionCircuitBreaker();
       breaker.bindConversation(1);
@@ -434,7 +444,6 @@ void main() {
       breaker.bindConversation(1);
       expect(breaker.consecutiveFailures, 2);
     });
-
     test('熔断提示为中文且含次数与手动重试指引', () {
       final breaker = AutoCompressionCircuitBreaker();
       expect(breaker.pauseHint, contains('3 次'));

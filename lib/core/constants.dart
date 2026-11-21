@@ -4,7 +4,7 @@ abstract final class AppConstants {
   static const String appName = 'Talkroom';
 
   /// 当前应用版本号（与 pubspec.yaml 的 version 保持一致；检查更新时与远端 tag 比对）
-  static const String appVersion = '1.2.24';
+  static const String appVersion = '1.2.25';
 
   /// 未绑定 API 配置时的会话标题
   static const String defaultConversationTitle = '新会话';
@@ -117,9 +117,19 @@ abstract final class AppConstants {
   static const int memoryInjectMaxChars = 2000;
 
   /// P2-13：单次请求组装的总长度预算（字符）。
-  /// history + 记忆 + 系统提示词等所有段共享此上限，超限从最旧历史
-  /// 开始截断，防止请求超出模型上下文窗口。
+  ///
+  /// v1.2.25 起仅保留用于旧配置兼容：请求组装与估算已统一改为 token 口径
+  /// （见 [contextRequestBudgetRatio] + `ContextAssembler`），因为「字符」
+  /// 与「token 窗口」单位不一致，中文场景下该字符预算形同虚设。
   static const int requestContextMaxChars = 120000;
+
+  /// v1.2.25：请求上下文 token 硬预算占上下文窗口的比例。
+  /// 与自动压缩阈值（默认 70%）互补：即使关闭自动压缩或估算偏低，
+  /// 组装时也会按「窗口 × 0.9」再兜底裁剪一次。
+  static const double contextRequestBudgetRatio = 0.9;
+
+  /// v1.2.25：摘要请求固定温度（不沿用会话采样参数，避免高温导致摘要跑偏）。
+  static const double contextSummaryTemperature = 0.2;
   /// 自动整理单轮取消息上限（功能四）。
   static const int memorySummaryMaxMessages = 50;
   /// 自动整理单轮取消息文本总字数上限（功能四）。

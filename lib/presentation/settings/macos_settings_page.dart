@@ -1182,6 +1182,15 @@ class _ContextCompressionPanelState
       _snack('摘要最大字数需为 100 ~ 5000 的整数');
       return;
     }
+    // v1.2.25（P3-07）：交叉校验 —— 尾部保留预算若不小于「窗口 × 触发阈值」，
+    // 压缩永远切不出更早消息，只会空转（触发后无待压缩内容）。
+    final trigger = (window * percent / 100).round();
+    if (tail >= trigger) {
+      _snack('尾部保留（$tail token）需小于触发阈值'
+          '（$trigger token = 窗口 $window × $percent%），'
+          '否则压缩切不出待压缩内容，会一直空转');
+      return;
+    }
     setState(() => _saving = true);
     try {
       final notifier = ref.read(settingsProvider.notifier);

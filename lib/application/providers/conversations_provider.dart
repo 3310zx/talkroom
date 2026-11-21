@@ -70,6 +70,29 @@ class ConversationsNotifier extends StateNotifier<List<Conversation>> {
     await load();
   }
 
+  /// 仅更新上下文压缩摘要三列（v1.2.25 / P1-02）。
+  ///
+  /// 不整行覆盖会话：DB 只写三列，内存态也只替换这三列，
+  /// 避免把压缩期间并发修改的标题 / 最后消息 / 温度回退成旧值。
+  /// [summary] 为 null 时表示清除摘要（同时清空游标与时间）。
+  Future<void> updateContextSummary(
+      int id, String? summary, int? uptoId, int? updatedAt) async {
+    await _repository.updateContextSummary(id, summary, uptoId, updatedAt);
+    final clearing = summary == null || summary.isEmpty;
+    state = [
+      for (final c in state)
+        if (c.id == id)
+          c.copyWith(
+            contextSummary: clearing ? null : summary,
+            contextSummaryUptoId: clearing ? null : uptoId,
+            contextSummaryUpdatedAt: clearing ? null : updatedAt,
+            clearContextSummary: clearing,
+          )
+        else
+          c,
+    ];
+  }
+
   Future<void> togglePinned(Conversation conversation) async {
     await update(conversation.copyWith(pinned: !conversation.pinned));
   }

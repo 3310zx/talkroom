@@ -181,6 +181,11 @@ class BackupPromptTemplate {
 
 /// 消息备份项。附件复用领域模型 [MessageAttachment]（含图片 base64）。
 class BackupMessage {
+  /// 导出时的消息自增 id（v1.2.25 / P2-07）。
+  ///
+  /// 导入时消息会获得新 id，[BackupConversation.contextSummaryUptoId]
+  /// 需依靠它重映射；旧备份缺该字段时为 null。
+  final int? refId;
   final String role;
   final String content;
   final String contentType;
@@ -197,6 +202,7 @@ class BackupMessage {
   final int? cachedTokens;
 
   const BackupMessage({
+    this.refId,
     required this.role,
     required this.content,
     this.contentType = 'text',
@@ -214,6 +220,7 @@ class BackupMessage {
   });
 
   Map<String, dynamic> toJson() => {
+        'ref_id': refId,
         'role': role,
         'content': content,
         'content_type': contentType,
@@ -231,6 +238,7 @@ class BackupMessage {
       };
 
   factory BackupMessage.fromJson(Map<String, dynamic> map) => BackupMessage(
+        refId: map['ref_id'] as int?,
         role: map['role'] as String? ?? '',
         content: map['content'] as String? ?? '',
         contentType: map['content_type'] as String? ?? 'text',
@@ -267,6 +275,12 @@ class BackupConversation {
   final String? lastMessage;
   final int updatedAt;
   final int createdAt;
+
+  /// 上下文压缩摘要三列（v1.2.25 / P2-07）。
+  /// 旧备份缺失这三列时按 null 处理，导入后等价于「未压缩」。
+  final String? contextSummary;
+  final int? contextSummaryUptoId;
+  final int? contextSummaryUpdatedAt;
   final List<BackupMessage> messages;
 
   const BackupConversation({
@@ -286,8 +300,17 @@ class BackupConversation {
     this.lastMessage,
     required this.updatedAt,
     required this.createdAt,
+    this.contextSummary,
+    this.contextSummaryUptoId,
+    this.contextSummaryUpdatedAt,
     this.messages = const [],
   });
+
+  /// 旧备份可能不带摘要字段或存空串，统一归一为 null。
+  static String? _normalizeSummary(dynamic raw) {
+    final text = (raw as String?)?.trim();
+    return (text == null || text.isEmpty) ? null : text;
+  }
 
   Map<String, dynamic> toJson() => {
         'ref_id': refId,
@@ -306,6 +329,9 @@ class BackupConversation {
         'last_message': lastMessage,
         'updated_at': updatedAt,
         'created_at': createdAt,
+        'context_summary': contextSummary,
+        'context_summary_upto_id': contextSummaryUptoId,
+        'context_summary_updated_at': contextSummaryUpdatedAt,
         'messages': messages.map((e) => e.toJson()).toList(),
       };
 
@@ -327,6 +353,10 @@ class BackupConversation {
         lastMessage: map['last_message'] as String?,
         updatedAt: map['updated_at'] as int? ?? 0,
         createdAt: map['created_at'] as int? ?? 0,
+        // v1.2.25（P2-07）：兼容旧备份（缺字段时按 null）。
+        contextSummary: _normalizeSummary(map['context_summary']),
+        contextSummaryUptoId: map['context_summary_upto_id'] as int?,
+        contextSummaryUpdatedAt: map['context_summary_updated_at'] as int?,
         messages: (map['messages'] as List? ?? const [])
             .whereType<Map<String, dynamic>>()
             .map(BackupMessage.fromJson)

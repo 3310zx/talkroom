@@ -252,6 +252,19 @@ class _FakeConversationRepository implements ConversationRepository {
   }
 
   @override
+  Future<void> updateContextSummary(
+      int id, String? summary, int? uptoId, int? updatedAt) async {
+    final i = _items.indexWhere((c) => c.id == id);
+    if (i < 0) return;
+    _items[i] = _items[i].copyWith(
+      contextSummary: summary,
+      contextSummaryUptoId: uptoId,
+      contextSummaryUpdatedAt: updatedAt,
+      clearContextSummary: summary == null || summary.isEmpty,
+    );
+  }
+
+  @override
   Future<void> delete(int id) async {
     _items.removeWhere((item) => item.id == id);
   }
